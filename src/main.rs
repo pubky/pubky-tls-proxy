@@ -1,12 +1,9 @@
 use anyhow::{Context, Result};
 use clap::Parser;
 use pkarr::Keypair;
-use std::{fs, net::SocketAddr, path::PathBuf};
-use tokio::{
-    signal,
-    sync::oneshot,
-};
-use tracing::{error, info, Level};
+use std::{fs, net::SocketAddr, path::PathBuf, time::Duration};
+use tokio::signal;
+use tracing::{info, Level};
 use tracing_subscriber;
 
 mod proxy;
@@ -56,27 +53,15 @@ async fn main() -> Result<()> {
     let keypair = Keypair::from_secret_key(&secret_key_array);
 
     // Create the proxy and start it in the background
-    let proxy = TlsProxy::new(keypair, args.listen_addr, args.backend_addr);
-    // Create a channel for shutdown signal
-    let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
-    let proxy_handle = proxy.start(shutdown_rx); // Pass receiver to start
+    let proxy = TlsProxy::run(keypair, args.listen_addr, args.backend_addr);
 
     // Wait for Ctrl+C
     info!("Press Ctrl+C to stop the proxy");
     signal::ctrl_c().await.context("Failed to listen for Ctrl+C")?;
     info!("Received shutdown signal, shutting down...");
 
-    // Send shutdown signal
-    if shutdown_tx.send(()).is_err() {
-        error!("Failed to send shutdown signal to proxy task.");
-    }
-
     // Wait for the proxy task to complete
-    match proxy_handle.await {
-        Ok(Ok(())) => info!("Proxy task shut down gracefully."),
-        Ok(Err(e)) => error!("Proxy task exited with error: {}", e),
-        Err(e) => error!("Failed to join proxy task: {}", e),
-    }
+    proxy.shutdown(Some(Duration::from_secs(5))).await?;
 
     info!("Shutdown complete.");
 

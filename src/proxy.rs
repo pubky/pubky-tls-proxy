@@ -1,8 +1,8 @@
 use anyhow::{Context, Result};
-use pkarr::Keypair;
-use std::{net::SocketAddr, sync::Arc};
+use pkarr::{Keypair, PublicKey};
+use std::{net::SocketAddr, sync::Arc, time::Duration};
 use tokio::{
-    io::{self, AsyncWriteExt},
+    io::{self, AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
     sync::oneshot,
     task::JoinHandle,
@@ -15,24 +15,42 @@ pub struct TlsProxy {
     keypair: Keypair,
     listen_addr: SocketAddr,
     backend_addr: SocketAddr,
+    join_handle: JoinHandle<Result<()>>,
+    shutdown_tx: oneshot::Sender<()>,
 }
 
 impl TlsProxy {
-    pub fn new(keypair: Keypair, listen_addr: SocketAddr, backend_addr: SocketAddr) -> Self {
+    pub fn run(keypair: Keypair, listen_addr: SocketAddr, backend_addr: SocketAddr) -> Self {
+        let (join_handle, shutdown_tx) = Self::start(keypair.clone(), listen_addr.clone(), backend_addr.clone());
         Self {
             keypair,
             listen_addr,
             backend_addr,
+            join_handle,
+            shutdown_tx,
+        }
+    }
+
+    /// Shutdown the proxy.
+    pub async fn shutdown(self, timeout: Option<Duration>) -> anyhow::Result<()> {
+        if let Err(_) = self.shutdown_tx.send(()) {
+            anyhow::bail!("Failed to send shutdown signal");
+        };
+        let timeout_duration = timeout.unwrap_or(Duration::from_secs(10));
+        match tokio::time::timeout(timeout_duration, self.join_handle).await {
+            Ok(result) => result?,
+            Err(_) => {
+                // Timeout occurred
+                anyhow::bail!("Proxy shutdown timed out after {:?}", timeout_duration)
+            }
         }
     }
 
     /// Start the proxy in a background task
-    pub fn start(&self, mut shutdown_rx: oneshot::Receiver<()>) -> JoinHandle<Result<()>> {
-        let keypair = self.keypair.clone();
-        let listen_addr = self.listen_addr;
-        let backend_addr = self.backend_addr;
+    fn start(keypair: Keypair, listen_addr: SocketAddr, backend_addr: SocketAddr) -> (JoinHandle<Result<()>>, oneshot::Sender<()>) {
+        let (shutdown_tx, mut shutdown_rx) = tokio::sync::oneshot::channel::<()>();
 
-        tokio::spawn(async move {
+        let handle = tokio::spawn(async move {
             // Create rustls server config from keypair
             let tls_config = Arc::new(keypair.to_rpk_rustls_server_config());
             let tls_acceptor = TlsAcceptor::from(tls_config);
@@ -139,7 +157,24 @@ impl TlsProxy {
                 }
             }
             Ok(()) // Return Ok when loop finishes gracefully
-        })
+        });
+
+        (handle, shutdown_tx)
+    }
+
+    /// Backend address the traffic is forwarded to.
+    pub fn backend_addr(&self) -> SocketAddr {
+        self.backend_addr
+    }
+
+    /// Address the proxy is listening on.
+    pub fn listen_addr(&self) -> SocketAddr {
+        self.listen_addr
+    }
+
+    /// Public key of the proxy.
+    pub fn public_key(&self) -> PublicKey {
+        self.keypair.public_key()
     }
 }
 
@@ -164,11 +199,66 @@ mod tests {
                         Ok((mut stream, client_addr)) => {
                             info!("[Backend] Accepted connection from {}", client_addr);
                             tokio::spawn(async move {
-                                let (mut reader, mut writer) = stream.split();
-                                match io::copy(&mut reader, &mut writer).await {
-                                    Ok(bytes) => info!("[Backend] Echoed {} bytes for {}", bytes, client_addr),
-                                    Err(e) => error!("[Backend] Error echoing data for {}: {}", client_addr, e),
+                                // Read the request
+                                let mut buffer = vec![0; 4096];
+                                let n = match stream.read(&mut buffer).await {
+                                    Ok(n) => n,
+                                    Err(e) => {
+                                        error!("[Backend] Error reading request: {}", e);
+                                        return;
+                                    }
+                                };
+                                
+                                if n == 0 {
+                                    // Empty request
+                                    error!("[Backend] Empty request from {}", client_addr);
+                                    return;
                                 }
+                                
+                                // Extract the request body
+                                let req_data = String::from_utf8_lossy(&buffer[0..n]);
+                                
+                                // For HTTP POST request, find the request body after headers
+                                let body = if req_data.contains("POST") {
+                                    if let Some(idx) = req_data.find("\r\n\r\n") {
+                                        let body_start = idx + 4;
+                                        if body_start < req_data.len() {
+                                            &req_data[body_start..]
+                                        } else {
+                                            ""
+                                        }
+                                    } else {
+                                        ""
+                                    }
+                                } else {
+                                    ""
+                                };
+                                
+                                info!("[Backend] Received request: {} bytes", n);
+                                
+                                // Send HTTP response with the same body
+                                let response = format!(
+                                    "HTTP/1.1 200 OK\r\n\
+                                    Content-Type: text/plain\r\n\
+                                    Content-Length: {}\r\n\
+                                    Connection: close\r\n\
+                                    \r\n\
+                                    {}",
+                                    body.len(),
+                                    body
+                                );
+                                
+                                if let Err(e) = stream.write_all(response.as_bytes()).await {
+                                    error!("[Backend] Error writing response: {}", e);
+                                    return;
+                                }
+                                
+                                if let Err(e) = stream.flush().await {
+                                    error!("[Backend] Error flushing: {}", e);
+                                    return;
+                                }
+                                
+                                info!("[Backend] Echoed {} bytes for {}", body.len(), client_addr);
                             });
                         }
                         Err(e) => {
@@ -200,9 +290,7 @@ mod tests {
         // Create and start the proxy
         let proxy_addr: SocketAddr = format!("127.0.0.1:5001").parse()?;
 
-        let proxy = TlsProxy::new(keypair.clone(), proxy_addr, backend_addr);
-        let (proxy_shutdown_tx, proxy_shutdown_rx) = tokio::sync::oneshot::channel::<()>();
-        let proxy_handle = proxy.start(proxy_shutdown_rx);
+        let proxy = TlsProxy::run(keypair.clone(), proxy_addr, backend_addr);
 
         // Publish pkarr record
         let pkarr_client = pkarr::Client::builder().build()?;
@@ -214,7 +302,7 @@ mod tests {
 
         // Add SVCB record
         let mut svcb = SVCB::new(0, root_name.clone());
-        svcb.set_port(81);
+        svcb.set_port(proxy_addr.port() as u16);
         builder = builder.https(root_name.clone(), svcb, 60 * 60);
 
         let packet = builder.build(&keypair).unwrap();
@@ -247,11 +335,8 @@ mod tests {
         info!("Response verified successfully.");
 
         // Shutdown servers
-        let _ = proxy_shutdown_tx.send(());
+        proxy.shutdown(Some(Duration::from_secs(5))).await?;
         let _ = backend_shutdown_tx.send(());
-
-        // Wait for tasks to complete
-        let _ = proxy_handle.await;
         let _ = backend_handle.await;
 
         Ok(())
