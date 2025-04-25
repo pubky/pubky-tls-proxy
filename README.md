@@ -4,15 +4,9 @@
 
 This tool acts as a TLS terminating proxy for RFC 7250 certificates. It allows you to:
 
-1. Load a Pubky secret from a file
+1. Load a Pubky secret from a file.
 2. Create a TLS server using Pubky TLS (RFC 7250).
 3. Forward decrypted traffic to another service, for example NGINX.
-
-## Installation
-
-```bash
-cargo install --path .
-```
 
 ## Usage
 

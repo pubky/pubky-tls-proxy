@@ -34,10 +34,13 @@ async fn main() -> Result<()> {
     // Parse command line arguments
     let args = Args::parse();
 
-    // Load secret key from file
-    info!("Loading secret key from {:?}", args.secret_file);
-    let secret_hex = fs::read_to_string(&args.secret_file)
-        .with_context(|| format!("Failed to read secret file: {:?}", args.secret_file))?;
+    // Get absolute path of the secret file
+    let path = args.secret_file.canonicalize()
+        .with_context(|| format!("Failed to get absolute path for: {:?}", args.secret_file))?;
+
+    info!("Loading secret file from {:?}", path);
+    let secret_hex = fs::read_to_string(&path)
+        .with_context(|| format!("Failed to read secret file: {:?}", path))?;
 
     // Convert hex to bytes
     let secret_bytes = hex::decode(secret_hex.trim()).context("Failed to decode hex secret key")?;
@@ -54,6 +57,9 @@ async fn main() -> Result<()> {
 
     // Create the proxy and start it in the background
     let proxy = TlsProxy::run(keypair, args.listen_addr, args.backend_addr);
+    info!("TLS proxy listening on {}", proxy.listen_addr());
+    info!("Forwarding decrypted traffic to {}", proxy.backend_addr());
+    info!("Using public key: {}", proxy.public_key());
 
     // Wait for Ctrl+C
     info!("Press Ctrl+C to stop the proxy");

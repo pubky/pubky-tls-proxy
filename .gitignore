@@ -1,3 +1,4 @@
 /target
 secret
 .cursor/
+.DS_Store

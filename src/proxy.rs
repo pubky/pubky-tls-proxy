@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use pkarr::{Keypair, PublicKey};
 use std::{net::SocketAddr, sync::Arc, time::Duration};
 use tokio::{
-    io::{self, AsyncReadExt, AsyncWriteExt},
+    io::{self, AsyncWriteExt},
     net::{TcpListener, TcpStream},
     sync::oneshot,
     task::JoinHandle,
@@ -59,10 +59,6 @@ impl TlsProxy {
             let listener = TcpListener::bind(listen_addr)
                 .await
                 .with_context(|| format!("Failed to bind to listen address: {}", listen_addr))?;
-
-            info!("TLS proxy listening on {}", listen_addr);
-            info!("Forwarding decrypted traffic to {}", backend_addr);
-            info!("Using public key: {}", keypair.public_key());
 
             // Accept connections in a loop
             loop {
@@ -203,6 +199,8 @@ mod tests {
     use pkarr::dns::{rdata::SVCB, Name};
     use tracing::Level;
     use tracing_subscriber;
+    use tokio::io::AsyncReadExt;
+
 
     use super::*;
 
