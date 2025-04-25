@@ -1,6 +1,9 @@
 # Pubky TLS Proxy
 
-> ⚠️ Very rough prototype. Production use not recommended.
+[![GitHub Release](https://img.shields.io/github/v/release/pubky/pubky-tls-proxy)](https://github.com/pubky/pubky-tls-proxy/releases/latest/)
+[![Telegram Chat Group](https://img.shields.io/badge/Chat-Telegram-violet)](https://t.me/pubkycore)
+
+> ⚠️ Very rough prototype. Production use not recommended yet.
 
 This tool acts as a TLS terminating proxy for RFC 7250 certificates. It allows you to:
 
