@@ -8,8 +8,6 @@ use tokio::{
 };
 use tracing::{error, info, Level};
 use tracing_subscriber;
-use tokio::net::TcpListener as TokioTcpListener;
-use tokio::sync::oneshot as tokio_oneshot;
 
 mod proxy;
 use proxy::TlsProxy;

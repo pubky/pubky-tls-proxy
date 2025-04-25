@@ -10,6 +10,7 @@ use tokio::{
 use tokio_rustls::TlsAcceptor;
 use tracing::{error, info};
 
+
 pub struct TlsProxy {
     keypair: Keypair,
     listen_addr: SocketAddr,
@@ -140,6 +141,119 @@ impl TlsProxy {
             Ok(()) // Return Ok when loop finishes gracefully
         })
     }
-} 
+}
+
+#[cfg(test)]
+mod tests {
+    use pkarr::dns::{rdata::SVCB, Name};
+    use tracing::Level;
+    use tracing_subscriber;
+
+    use super::*;
+
+    async fn run_backend_server(addr: SocketAddr, mut shutdown_rx: tokio::sync::oneshot::Receiver<()>) {
+        let listener = tokio::net::TcpListener::bind(addr)
+            .await
+            .expect("Failed to bind backend server");
+        info!("[Backend] Listening on {}", addr);
+
+        loop {
+            tokio::select! {
+                accepted = listener.accept() => {
+                    match accepted {
+                        Ok((mut stream, client_addr)) => {
+                            info!("[Backend] Accepted connection from {}", client_addr);
+                            tokio::spawn(async move {
+                                let (mut reader, mut writer) = stream.split();
+                                match io::copy(&mut reader, &mut writer).await {
+                                    Ok(bytes) => info!("[Backend] Echoed {} bytes for {}", bytes, client_addr),
+                                    Err(e) => error!("[Backend] Error echoing data for {}: {}", client_addr, e),
+                                }
+                            });
+                        }
+                        Err(e) => {
+                            error!("[Backend] Failed to accept connection: {}", e);
+                        }
+                    }
+                }
+                _ = &mut shutdown_rx => {
+                    info!("[Backend] Shutdown signal received.");
+                    break;
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_proxy_request() -> Result<()> {
+        // Setup simple tracing for test output
+        tracing_subscriber::fmt().with_max_level(Level::INFO).init();
+        
+        let keypair = Keypair::random();
+
+        // Start the backend server
+        let backend_addr: SocketAddr = format!("127.0.0.1:5000").parse()?;
+        let (backend_shutdown_tx, backend_shutdown_rx) = tokio::sync::oneshot::channel::<()>();
+        let backend_handle = tokio::spawn(run_backend_server(backend_addr, backend_shutdown_rx));
 
 
+        // Create and start the proxy
+        let proxy_addr: SocketAddr = format!("127.0.0.1:5001").parse()?;
+
+        let proxy = TlsProxy::new(keypair.clone(), proxy_addr, backend_addr);
+        let (proxy_shutdown_tx, proxy_shutdown_rx) = tokio::sync::oneshot::channel::<()>();
+        let proxy_handle = proxy.start(proxy_shutdown_rx);
+
+        // Publish pkarr record
+        let pkarr_client = pkarr::Client::builder().build()?;
+        let root_name = Name::new(".").unwrap();
+
+        // Add A record
+        let mut builder = pkarr::SignedPacket::builder();
+        builder = builder.a(root_name.clone(), "127.0.0.1".parse().unwrap(), 300);
+
+        // Add SVCB record
+        let mut svcb = SVCB::new(0, root_name.clone());
+        svcb.set_port(81);
+        builder = builder.https(root_name.clone(), svcb, 60 * 60);
+
+        let packet = builder.build(&keypair).unwrap();
+        pkarr_client.publish(&packet, None).await?;
+
+        // Configure Reqwest client to trust the proxy's RPK
+        let client = reqwest::ClientBuilder::from(pkarr_client).build()?;
+
+        let url = format!("https://{}:{}", keypair.public_key().to_z32(), proxy_addr.port());
+        let request_body = "Hello from client!";
+
+        info!("Making request to {}", url);
+        // Make request to the proxy
+        let response = client
+            .post(&url)
+            .body(request_body)
+            .send()
+            .await
+            .context("Failed to send request via proxy")?;
+
+        info!("Received response: {:?}", response);
+
+        // Verify response
+        assert!(response.status().is_success());
+        let response_body = response
+            .text()
+            .await
+            .context("Failed to read response body")?;
+        assert_eq!(response_body, request_body);
+        info!("Response verified successfully.");
+
+        // Shutdown servers
+        let _ = proxy_shutdown_tx.send(());
+        let _ = backend_shutdown_tx.send(());
+
+        // Wait for tasks to complete
+        let _ = proxy_handle.await;
+        let _ = backend_handle.await;
+
+        Ok(())
+    }
+}
