@@ -102,6 +102,26 @@ impl TlsProxy {
                                         "Failed to connect to backend {} for {}: {}",
                                         backend_addr, client_addr, e
                                     );
+                                    
+                                    // Send HTTP 502 Bad Gateway response to client
+                                    let (_, mut tls_writer) = io::split(tls_stream);
+                                    let error_msg = format!("Backend connection error: {}", e);
+                                    let response = format!(
+                                        "HTTP/1.1 502 Bad Gateway\r\n\
+                                        Content-Type: text/plain\r\n\
+                                        Content-Length: {}\r\n\
+                                        Connection: close\r\n\
+                                        \r\n\
+                                        {}",
+                                        error_msg.len(),
+                                        error_msg
+                                    );
+                                    
+                                    if let Err(write_err) = tls_writer.write_all(response.as_bytes()).await {
+                                        error!("Failed to send error response to client: {}", write_err);
+                                    }
+                                    
+                                    let _ = tls_writer.shutdown().await;
                                     return;
                                 }
                             };
@@ -338,6 +358,72 @@ mod tests {
         proxy.shutdown(Some(Duration::from_secs(5))).await?;
         let _ = backend_shutdown_tx.send(());
         let _ = backend_handle.await;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_proxy_with_backend_down() -> Result<()> {
+        // Setup simple tracing for test output
+        tracing_subscriber::fmt().with_max_level(Level::INFO).init();
+        
+        let keypair = Keypair::random();
+
+        // Choose a backend address but don't start the backend server
+        let backend_addr: SocketAddr = format!("127.0.0.1:5002").parse()?;
+        
+        // Create and start the proxy
+        let proxy_addr: SocketAddr = format!("127.0.0.1:5003").parse()?;
+        let proxy = TlsProxy::run(keypair.clone(), proxy_addr, backend_addr);
+
+        // Publish pkarr record
+        let pkarr_client = pkarr::Client::builder().build()?;
+        let root_name = Name::new(".").unwrap();
+
+        // Add A record
+        let mut builder = pkarr::SignedPacket::builder();
+        builder = builder.a(root_name.clone(), "127.0.0.1".parse().unwrap(), 300);
+
+        // Add SVCB record
+        let mut svcb = SVCB::new(0, root_name.clone());
+        svcb.set_port(proxy_addr.port() as u16);
+        builder = builder.https(root_name.clone(), svcb, 60 * 60);
+
+        let packet = builder.build(&keypair).unwrap();
+        pkarr_client.publish(&packet, None).await?;
+
+        // Configure Reqwest client to trust the proxy's RPK
+        let client = reqwest::ClientBuilder::from(pkarr_client).build()?;
+
+        let url = format!("https://{}:{}", keypair.public_key().to_z32(), proxy_addr.port());
+        let request_body = "Hello from client!";
+
+        info!("Making request to {} with backend down at {}", url, backend_addr);
+        
+        // Make request to the proxy - now expecting a 502 HTTP error
+        let response = client
+            .post(&url)
+            .body(request_body)
+            .timeout(Duration::from_secs(5))
+            .send()
+            .await
+            .context("Failed to get response from proxy")?;
+        
+        // Verify we get a 502 Bad Gateway
+        assert_eq!(response.status(), reqwest::StatusCode::BAD_GATEWAY, 
+            "Expected 502 Bad Gateway status code, got: {}", response.status());
+        
+        info!("Received expected 502 Bad Gateway response: {:?}", response);
+        
+        // Read response body to verify error message
+        let response_body = response.text().await?;
+        assert!(response_body.contains("Backend connection error"), 
+            "Expected error message in response body, got: {}", response_body);
+        
+        info!("Response body contains expected error message: {}", response_body);
+
+        // Shutdown proxy
+        proxy.shutdown(Some(Duration::from_secs(5))).await?;
 
         Ok(())
     }

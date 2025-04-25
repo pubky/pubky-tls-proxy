@@ -1,5 +1,5 @@
 [package]
-name = "pkarr-rusttls-certs-converter"
+name = "pubky-tls-proxy"
 version = "0.1.0"
 edition = "2021"
 
