@@ -8,7 +8,7 @@ use tokio::{
     task::JoinHandle,
 };
 use tokio_rustls::TlsAcceptor;
-use tracing::{error, info};
+use tracing::{error, info, debug};
 
 
 pub struct TlsProxy {
@@ -107,12 +107,23 @@ impl TlsProxy {
                         "Client {} -> Backend {}: Copied {} bytes",
                         client_addr, backend_addr, bytes
                     ),
-                    Err(e) => error!(
-                        "Error copying Client -> Backend for {}: {}",
-                        client_addr, e
-                    ),
+                    Err(e) => {
+                        let err_str = e.to_string();
+                        if err_str.contains("peer closed connection without sending TLS close_notify") {
+                            debug!(
+                                "Client {} closed connection without sending TLS close_notify (not an error): {}",
+                                client_addr, e
+                            );
+                        } else {
+                            error!(
+                                "Error copying Client -> Backend for {}: {}",
+                                client_addr, e
+                            );
+                        }
+                    }
                 }
                 // Shut down the backend writer to signal EOF
+                
                 let _ = backend_writer.shutdown().await;
             };
 
