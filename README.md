@@ -19,8 +19,8 @@ pubky-tls-proxy --secret-file <PATH_TO_SECRET_KEY> --backend-addr <BACKEND_ADDRE
 ### Arguments
 
 - `--secret-file`: Path to a file containing the pubky secret in HEX format (must be 32 bytes/64 hex characters)
-- `--backend-addr`: Address to proxy requests to after TLS termination (e.g., 127.0.0.1:8080) [default: 127.0.0.1:8080]
-- `--listen-addr`: Address to listen on for incoming TLS connections (e.g., 0.0.0.0:8443) [default: 0.0.0.0:8443]
+- `--backend-addr`: Address to proxy requests to after TLS termination [default: 127.0.0.1:6286]
+- `--listen-addr`: Address to listen on for incoming TLS connections [default: 0.0.0.0:8443]
 
 ### Example
 

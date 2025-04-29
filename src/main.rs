@@ -17,8 +17,8 @@ struct Args {
     #[arg(long, value_name = "FILE")]
     secret_file: PathBuf,
 
-    /// Address to proxy requests to (e.g., 127.0.0.1:8080).
-    #[arg(long, value_name = "ADDR", default_value = "127.0.0.1:8080")]
+    /// Address to proxy requests to (e.g., 127.0.0.1:6286).
+    #[arg(long, value_name = "ADDR", default_value = "127.0.0.1:6286")]
     backend_addr: SocketAddr,
 
     /// Address to listen on for incoming TLS connections (e.g., 0.0.0.0:8443).
