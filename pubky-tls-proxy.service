@@ -1,0 +1,14 @@
+# https://github.com/pubky/pubky-tls-proxy/blob/master/pubky-tls-proxy.service
+[Unit]
+Description=pubky-tls-proxy - TLS terminating proxy for raw public key TLS RFC 7250 which is used in Pubky
+After=network-online.target
+
+[Service]
+# Update the binary path. Add --verbose to the command if you want to have more insights.
+ExecStart=/usr/local/bin/pubky-tls-proxy
+Environment="RUST_BACKTRACE=full"
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target
