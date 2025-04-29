@@ -5,7 +5,7 @@ After=network-online.target
 
 [Service]
 # Update the binary path. Add --verbose to the command if you want to have more insights.
-ExecStart=/usr/local/bin/pubky-tls-proxy
+ExecStart=/usr/local/bin/pubky-tls-proxy --secret-file=path-to-secret --backend-addr=127.0.0.1:6286 --listen-addr=0.0.0.0:8443
 Environment="RUST_BACKTRACE=full"
 Restart=on-failure
 RestartSec=5s
