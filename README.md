@@ -30,6 +30,7 @@ Every setting can be given on the command line or in a [config file](#config-fil
 - `--no-proxy-protocol`: Don't send a [PROXY protocol](https://www.haproxy.org/download/2.9/doc/proxy-protocol.txt) header to the backends. See below.
 - `--no-republish`: Don't [republish](#republishing-the-pkarr-packet) the pkarr packet.
 - `--republish-interval-secs`: Seconds between two republish runs [default: 3600].
+- `--packet-cache-file`: Where the [packet cache](#packet-cache) is kept [default: `pkarr-packet.cache` in the config directory].
 - `--pkarr-bootstrap-node`: Mainline DHT bootstrap node (`host:port`). Can be repeated. Replaces the default bootstrap nodes.
 - `--pkarr-relay`: Pkarr relay URL. Can be repeated. Replaces the default relays.
 - `--no-pkarr-dht` / `--no-pkarr-relays`: Don't republish to the DHT / to relays.
@@ -51,6 +52,7 @@ proxy_protocol = true
 [republish]
 enabled = true
 interval_secs = 3600
+cache_file = "pkarr-packet.cache"
 
 [pkarr]
 # A list replaces the defaults. An empty list disables that network.
@@ -64,13 +66,21 @@ The command line can only switch things off (`--no-...`). If the config file say
 
 DHT nodes and relays forget pkarr packets after a while unless they are published again. The proxy therefore republishes the packet of its public key: right after startup, then every `interval_secs`.
 
-Each run resolves the most recent packet from the DHT and the relays and publishes it again **unchanged**: same records, signature and timestamp. The proxy never creates or re-signs a packet, so you still need to publish the packet once with another tool. If no packet is found, a warning is logged.
+Each run resolves the most recent packet from the DHT and the relays and publishes it again **unchanged**: same records, signature and timestamp. The proxy never creates or re-signs a packet, so you still need to publish the packet once with another tool. If no packet is found, neither on the networks nor in the [packet cache](#packet-cache), a warning is logged.
 
 Each network is published to separately. A failed publish is retried after 1 and 5 minutes, then logged as an error. The next run starts at the next interval.
 
 DHT bootstrap nodes are resolved once at startup. Nodes without an IPv4 address are skipped with a warning.
 
 If the host blocks mainline DHT traffic (Google Cloud does, for example), set `bootstrap_nodes = []` in the config file or pass `--no-pkarr-dht`. The proxy then republishes through the relays only, and the relays publish the packet to the DHT themselves.
+
+### Packet cache
+
+The proxy keeps a copy of the most recent packet in `pkarr-packet.cache`, next to the config file by default. If the packet ever disappears from the DHT and the relays, the proxy republishes this copy instead. It also does so if the networks only return an older packet than the cached one.
+
+- The cache is always on while republishing is on. Change its location with `cache_file` or `--packet-cache-file`. The directory must be writable by the proxy.
+- The file holds one packet in pkarr's `SignedPacket::serialize` format. It's only replaced by a newer packet from the networks.
+- On every run the file is checked: a packet for another public key, with an invalid signature, or a corrupt file is ignored with a warning.
 
 ### PROXY protocol
 

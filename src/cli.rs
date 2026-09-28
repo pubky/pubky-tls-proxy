@@ -53,6 +53,12 @@ pub struct Args {
     #[arg(long, value_name = "SECONDS")]
     pub republish_interval_secs: Option<u64>,
 
+    /// File that keeps a copy of the pkarr packet, to republish it even if it disappeared
+    /// from the DHT and the relays. Relative to the config file's directory.
+    /// [default: pkarr-packet.cache]
+    #[arg(long, value_name = "FILE")]
+    pub packet_cache_file: Option<PathBuf>,
+
     /// Mainline DHT bootstrap node. Can be repeated. Replaces the default bootstrap nodes.
     #[arg(
         long = "pkarr-bootstrap-node",
