@@ -6,6 +6,10 @@ All notable changes are documented here. The format is based on
 
 ## [Unreleased]
 
+### Changed
+- Reworked the README with a plain-language introduction, clearer setup choices,
+  and an overview of traffic forwarding and backend requirements.
+
 ## [0.3.2] - 2026-09-28
 
 ### Security
