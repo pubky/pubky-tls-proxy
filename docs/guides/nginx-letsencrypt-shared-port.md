@@ -127,6 +127,7 @@ secret_file = "secret"
 listen_addrs = ["0.0.0.0:80", "0.0.0.0:443"]
 http_backend_addr = "127.0.0.1:8080"
 https_backend_addr = "127.0.0.1:8443"
+# Leave plain HTTP enabled (the default) for redirects and Let's Encrypt challenges.
 
 [republish]
 cache_file = "/var/lib/pubky-tls-proxy/pkarr-packet.cache"

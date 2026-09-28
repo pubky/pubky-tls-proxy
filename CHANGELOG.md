@@ -7,6 +7,8 @@ All notable changes are documented here. The format is based on
 ## [Unreleased]
 
 ### Added
+- `plain_http = false` / `--no-plain-http` to reject incoming plain HTTP on a Pubky-only port
+  without affecting decrypted Pubky TLS; rejected protocol traffic is logged at debug level.
 - Guide: [set up the proxy with nginx and Let's Encrypt](docs/guides/nginx-letsencrypt.md),
   with the proxy on its own port (8443).
 - Guide: [share ports 80 and 443 between nginx and the proxy](docs/guides/nginx-letsencrypt-shared-port.md).

@@ -85,11 +85,41 @@ async fn plain_http_with_backend_down_gets_bad_gateway() -> Result<()> {
 }
 
 #[tokio::test]
+async fn disabled_plain_http_is_closed_without_contacting_backend() -> Result<()> {
+    let backend = TcpListener::bind(localhost_any_port()).await?;
+    let proxy = Proxy::start(ProxyConfig {
+        plain_http: false,
+        ..proxy_config(backend.local_addr()?, None, true)
+    })
+    .await?;
+
+    let mut client = TcpStream::connect(proxy.listen_addrs()[0]).await?;
+    client
+        .write_all(b"GET / HTTP/1.1\r\nHost: example.com\r\n\r\n")
+        .await?;
+    let mut response = Vec::new();
+    client.read_to_end(&mut response).await?;
+
+    assert!(response.is_empty());
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), backend.accept())
+            .await
+            .is_err()
+    );
+
+    proxy.shutdown(None).await
+}
+
+#[tokio::test]
 async fn regular_https_is_passed_through_unchanged_to_https_backend() -> Result<()> {
     let http_backend = start_http_echo_backend().await?;
     let client_hello = x509_client_hello("example.com");
     let https_backend = RecordingBackend::start().await?;
-    let proxy = start_proxy(http_backend, Some(https_backend.addr()?), true).await?;
+    let proxy = Proxy::start(ProxyConfig {
+        plain_http: false,
+        ..proxy_config(http_backend, Some(https_backend.addr()?), true)
+    })
+    .await?;
 
     let mut client = TcpStream::connect(proxy.listen_addrs()[0]).await?;
     let client_port = client.local_addr()?.port();
@@ -120,6 +150,7 @@ async fn client_hanging_up_before_sending_anything_is_not_a_failure() -> Result<
             send_proxy_protocol: true,
         },
         https_backend: None,
+        plain_http: true,
     };
     let listener = TcpListener::bind(localhost_any_port()).await?;
     let client = TcpStream::connect(listener.local_addr()?).await?;
@@ -154,6 +185,7 @@ async fn pubky_tls_is_terminated_and_forwarded_to_http_backend() -> Result<()> {
     let http_backend = start_http_echo_backend().await?;
     let proxy = Proxy::start(ProxyConfig {
         keypair: keypair.clone(),
+        plain_http: false,
         ..proxy_config(http_backend, None, true)
     })
     .await?;
@@ -225,6 +257,7 @@ fn proxy_config(
         listen_addrs: vec![localhost_any_port()],
         http_backend_addr,
         https_backend_addr,
+        plain_http: true,
         send_proxy_protocol,
     }
 }

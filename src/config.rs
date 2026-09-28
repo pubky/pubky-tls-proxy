@@ -45,6 +45,7 @@ struct FileConfig {
     listen_addrs: Option<Vec<SocketAddr>>,
     http_backend_addr: Option<SocketAddr>,
     https_backend_addr: Option<SocketAddr>,
+    plain_http: Option<bool>,
     proxy_protocol: Option<bool>,
     #[serde(default)]
     republish: RepublishFileConfig,
@@ -76,6 +77,7 @@ pub struct Settings {
     pub listen_addrs: Vec<SocketAddr>,
     pub http_backend_addr: SocketAddr,
     pub https_backend_addr: Option<SocketAddr>,
+    pub plain_http: bool,
     pub send_proxy_protocol: bool,
     /// `None` if republishing is disabled.
     pub republish: Option<RepublishSettings>,
@@ -140,6 +142,7 @@ impl Settings {
                 .or(file.http_backend_addr)
                 .unwrap_or(DEFAULT_HTTP_BACKEND_ADDR),
             https_backend_addr: args.https_backend_addr.or(file.https_backend_addr),
+            plain_http: !args.no_plain_http && file.plain_http.unwrap_or(true),
             send_proxy_protocol: !args.no_proxy_protocol && file.proxy_protocol.unwrap_or(true),
             republish,
         })
@@ -364,6 +367,7 @@ mod tests {
         assert_eq!(settings.listen_addrs, vec![DEFAULT_LISTEN_ADDR]);
         assert_eq!(settings.http_backend_addr, DEFAULT_HTTP_BACKEND_ADDR);
         assert_eq!(settings.https_backend_addr, None);
+        assert!(settings.plain_http);
         assert!(settings.send_proxy_protocol);
         let republish = settings.republish.unwrap();
         assert_eq!(republish.interval, Duration::from_secs(3600));
@@ -386,6 +390,7 @@ mod tests {
             listen_addrs = ["0.0.0.0:80", "0.0.0.0:443"]
             http_backend_addr = "127.0.0.1:8080"
             https_backend_addr = "127.0.0.1:8443"
+            plain_http = false
             proxy_protocol = false
 
             [republish]
@@ -420,6 +425,7 @@ mod tests {
             settings.https_backend_addr,
             Some("127.0.0.1:8443".parse().unwrap())
         );
+        assert!(!settings.plain_http);
         assert!(!settings.send_proxy_protocol);
         let republish = settings.republish.unwrap();
         assert_eq!(republish.interval, Duration::from_secs(600));
@@ -444,6 +450,7 @@ mod tests {
             secret_file = "from-file"
             listen_addrs = ["0.0.0.0:80"]
             http_backend_addr = "127.0.0.1:8080"
+            plain_http = true
             [republish]
             interval_secs = 600
             [pkarr]
@@ -459,6 +466,7 @@ mod tests {
             pkarr_bootstrap_nodes: vec!["127.0.0.2:6881".into()],
             pkarr_relays: vec!["https://other-relay.example.com".into()],
             no_proxy_protocol: true,
+            no_plain_http: true,
             ..Args::default()
         };
 
@@ -473,6 +481,7 @@ mod tests {
             settings.http_backend_addr,
             "127.0.0.1:9001".parse().unwrap()
         );
+        assert!(!settings.plain_http);
         assert!(!settings.send_proxy_protocol);
         let republish = settings.republish.unwrap();
         assert_eq!(republish.interval, Duration::from_secs(60));

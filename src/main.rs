@@ -41,6 +41,7 @@ async fn main() -> Result<()> {
         listen_addrs: settings.listen_addrs.clone(),
         http_backend_addr: settings.http_backend_addr,
         https_backend_addr: settings.https_backend_addr,
+        plain_http: settings.plain_http,
         send_proxy_protocol: settings.send_proxy_protocol,
     })
     .await?;
@@ -90,7 +91,12 @@ fn log_proxy_settings(proxy: &Proxy, settings: &Settings) {
     for listen_addr in proxy.listen_addrs() {
         info!("Listening on {listen_addr}");
     }
-    info!("Plain HTTP and Pubky TLS -> {}", settings.http_backend_addr);
+    if settings.plain_http {
+        info!("Plain HTTP -> {}", settings.http_backend_addr);
+    } else {
+        info!("Plain HTTP -> rejected");
+    }
+    info!("Pubky TLS -> {}", settings.http_backend_addr);
     match settings.https_backend_addr {
         Some(https_backend_addr) => info!("Regular HTTPS -> {https_backend_addr}"),
         None => info!("Regular HTTPS -> rejected, no HTTPS backend configured"),

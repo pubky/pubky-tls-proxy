@@ -8,7 +8,7 @@ Browser ────────────────> nginx :80 / :443 ─�
 Pubky client ──> proxy :8443 ──> nginx 127.0.0.1:8080 ──┘
 ```
 
-The commands were tested on Debian 13. They also apply to Debian 12 and Ubuntu 24.04. If Pubky clients must use port 443, use the [shared-port guide](nginx-letsencrypt-shared-port.md) instead.
+The commands were tested on Debian 13. They also apply to Debian 12 and Ubuntu 24.04. If Pubky clients must use port 443, use the [shared-port guide](nginx-letsencrypt-shared-port.md) instead. On port 8443, the proxy rejects plain HTTP and ordinary HTTPS; nginx handles browser redirects on port 80.
 
 ## Before you begin
 
@@ -120,26 +120,16 @@ Enter your email address, accept the terms, and choose to redirect HTTP to HTTPS
 
 ## 4. Install pubky-tls-proxy
 
-On the [releases page](https://github.com/pubky/pubky-tls-proxy/releases/latest), find the latest version and the Linux archive for your server (for example, `linux-amd64` on an Intel/AMD server). The commands below use **v0.3.1 on linux-amd64**; replace the version and platform in the file names and URLs if necessary.
-
-Download the archive and checksum list into a folder in your home directory:
+**Version requirement:** `plain_http = false` in step 5 is newer than v0.3.1. Until a release supporting `--no-plain-http` is available, install from the current source. First [install a Rust toolchain](https://rustup.rs/), then run:
 
 ```bash
-mkdir -p ~/pubky-tls-proxy-download
-cd ~/pubky-tls-proxy-download
-curl -fLO https://github.com/pubky/pubky-tls-proxy/releases/download/v0.3.1/pubky-tls-proxy-linux-amd64-v0.3.1.tar.gz
-curl -fLO https://github.com/pubky/pubky-tls-proxy/releases/download/v0.3.1/SHA256SUMS
-sha256sum --ignore-missing -c SHA256SUMS
-```
-
-The checksum check must print `OK`. Extract and install the binary:
-
-```bash
-tar -xzf pubky-tls-proxy-linux-amd64-v0.3.1.tar.gz
-sudo cp pubky-tls-proxy-linux-amd64-v0.3.1/pubky-tls-proxy /usr/local/bin/pubky-tls-proxy
+cargo install --git https://github.com/pubky/pubky-tls-proxy.git --locked --root /tmp/pubky-tls-proxy-install
+sudo cp /tmp/pubky-tls-proxy-install/bin/pubky-tls-proxy /usr/local/bin/pubky-tls-proxy
 sudo chmod 755 /usr/local/bin/pubky-tls-proxy
-pubky-tls-proxy --version
+pubky-tls-proxy --help
 ```
+
+Check that the help output includes `--no-plain-http`. Once a supporting release is available, you can instead download the appropriate Linux archive from the [releases page](https://github.com/pubky/pubky-tls-proxy/releases/latest) and install its binary in `/usr/local/bin/`.
 
 ## 5. Configure the proxy
 
@@ -169,6 +159,7 @@ Paste this configuration and save it. The secret path is relative to this file; 
 secret_file = "secret"
 listen_addrs = ["0.0.0.0:8443"]
 http_backend_addr = "127.0.0.1:8080"
+plain_http = false
 
 [republish]
 cache_file = "/var/lib/pubky-tls-proxy/pkarr-packet.cache"
@@ -222,7 +213,7 @@ sudo systemctl enable --now pubky-tls-proxy
 sudo journalctl -u pubky-tls-proxy -n 30 --no-pager
 ```
 
-Look for your public key, `Listening on 0.0.0.0:8443`, and `Republished pkarr packet for …`. Republish may take a few seconds; check the log again if needed. `Regular HTTPS -> rejected, no HTTPS backend configured` is expected: browsers connect directly to nginx, not to this proxy.
+Look for your public key, `Listening on 0.0.0.0:8443`, `Plain HTTP -> rejected`, and `Republished pkarr packet for …`. Republish may take a few seconds; check the log again if needed. `Regular HTTPS -> rejected, no HTTPS backend configured` is expected: browsers connect directly to nginx, not to this proxy.
 
 ## 7. Verify the setup
 
@@ -273,5 +264,5 @@ For more logs, set `Environment=RUST_LOG=pubky_tls_proxy=debug` in the systemd s
 ## Next steps
 
 - [Configuration](../configuration.md) covers all settings.
-- To update the proxy, download the newer version as in step 4. Stop the service with `sudo systemctl stop pubky-tls-proxy` before copying over the running binary; then start it with `sudo systemctl start pubky-tls-proxy`.
+- To update the proxy, install a newer version as in step 4. Stop the service with `sudo systemctl stop pubky-tls-proxy` before copying over the running binary; then start it with `sudo systemctl start pubky-tls-proxy`.
 - To serve Pubky TLS and ordinary HTTPS on **the same port 443**, follow the [shared-port guide](nginx-letsencrypt-shared-port.md).
