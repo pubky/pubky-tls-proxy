@@ -1,0 +1,165 @@
+name: Release
+
+# Pushing a `v*` tag on `main` builds the binaries for all platforms and publishes a
+# GitHub release. The release notes are the matching section of CHANGELOG.md.
+#
+# - Run manually (`gh workflow run release.yml -f tag=v1.2.3`) for tags that were pushed
+#   before this workflow existed, or to retry a failed release.
+# - Pull requests that touch the build run the build jobs only, so a broken target shows
+#   up before the next release.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing tag to release, e.g. v0.3.0
+        required: true
+  pull_request:
+    paths:
+      - Cargo.toml
+      - Cargo.lock
+      - .github/workflows/release.yml
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  # Same revision as used for local builds.
+  CROSS_GIT_REV: 833e90e5e072df2d0acebd00172358dba5ed4d67
+  # Empty for pull requests.
+  TAG: ${{ inputs.tag || (github.ref_type == 'tag' && github.ref_name) || '' }}
+
+jobs:
+  verify:
+    name: Verify tag
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+          fetch-depth: 0
+
+      - name: Tag is on main
+        run: |
+          if ! git merge-base --is-ancestor "refs/tags/$TAG" origin/main; then
+            echo "::error::$TAG is not on main"
+            exit 1
+          fi
+
+      - name: Tag matches the version in Cargo.toml
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)
+          if [ "v$version" != "$TAG" ]; then
+            echo "::error::Tag $TAG doesn't match version $version in Cargo.toml"
+            exit 1
+          fi
+
+      # Read the changelog from main: older tags may not have it yet.
+      - name: Extract release notes from CHANGELOG.md
+        run: |
+          version="${TAG#v}"
+          git show origin/main:CHANGELOG.md \
+            | awk -v version="$version" '/^\[.+\]: / { exit } /^## \[/ { in_section = ($0 ~ "^## \\[" version "\\]"); next } in_section' \
+            > release-notes.md
+          if ! grep -q '[^[:space:]]' release-notes.md; then
+            echo "::error::CHANGELOG.md on main has no section for $version"
+            exit 1
+          fi
+          cat release-notes.md
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-notes
+          path: release-notes.md
+
+  build:
+    name: Build ${{ matrix.platform }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { platform: linux-amd64, target: x86_64-unknown-linux-musl, os: ubuntu-latest, builder: cross }
+          - { platform: linux-arm64, target: aarch64-unknown-linux-musl, os: ubuntu-latest, builder: cross }
+          - { platform: linux-armv7hf, target: armv7-unknown-linux-musleabihf, os: ubuntu-latest, builder: cross }
+          - { platform: linux-armhf, target: arm-unknown-linux-musleabihf, os: ubuntu-latest, builder: cross }
+          - { platform: windows-amd64, target: x86_64-pc-windows-gnu, os: ubuntu-latest, builder: cross }
+          - { platform: osx-arm64, target: aarch64-apple-darwin, os: macos-latest, builder: cargo }
+          - { platform: osx-amd64, target: x86_64-apple-darwin, os: macos-latest, builder: cargo }
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG || github.ref }}
+
+      - name: Install Rust
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup target add ${{ matrix.target }}
+
+      - name: Install cross
+        if: matrix.builder == 'cross'
+        run: cargo install cross --git https://github.com/cross-rs/cross --rev "$CROSS_GIT_REV" --locked
+
+      - name: Build
+        run: ${{ matrix.builder }} build --release --locked --target ${{ matrix.target }}
+
+      - name: Package
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)
+          binary=pubky-tls-proxy
+          if [[ "$TARGET" == *windows* ]]; then binary=pubky-tls-proxy.exe; fi
+
+          folder="pubky-tls-proxy-$PLATFORM-v$version"
+          mkdir "$folder"
+          cp "target/$TARGET/release/$binary" "$folder/"
+          tar -czf "$folder.tar.gz" "$folder"
+
+          # Never publish an archive without the binary.
+          tar -tzf "$folder.tar.gz" | grep -qx "$folder/$binary"
+          echo "ARCHIVE=$folder.tar.gz" >> "$GITHUB_ENV"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: archive-${{ matrix.platform }}
+          path: ${{ env.ARCHIVE }}
+
+  release:
+    name: Publish release
+    if: github.event_name != 'pull_request'
+    # Only publish if every platform was built.
+    needs: [verify, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: archive-*
+          merge-multiple: true
+          path: archives
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-notes
+
+      - name: Checksums
+        working-directory: archives
+        run: sha256sum -- *.tar.gz | tee SHA256SUMS
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          prerelease=""
+          if [[ "$TAG" == *-* ]]; then prerelease="--prerelease"; fi
+          gh release create "$TAG" archives/* \
+            --verify-tag --title "$TAG" --notes-file release-notes.md $prerelease
