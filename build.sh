@@ -1,3 +1,7 @@
+#!/usr/bin/env bash
+# Stop at the first failed build instead of packaging an empty archive.
+set -euo pipefail
+
 # `cargo pkgid` prints e.g. `path+file:///…/pubky-tls-proxy#0.3.0`; keep what follows `#` or `@`.
 export VERSION=$(cargo pkgid | sed 's/.*[#@]//')
 mkdir -p target
