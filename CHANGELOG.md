@@ -14,6 +14,7 @@ All notable changes are documented here. The format is based on
   `--no-pkarr-dht`, `--no-pkarr-relays`).
 - Config file `~/.pubky-tls-proxy/config.toml`, or `--config <FILE>`.
 - `RUST_LOG` support.
+- Release binaries are built on GitHub Actions, now including 32-bit ARM.
 
 ### Changed
 - **Breaking:** a relative `--secret-file` is resolved against the config directory.

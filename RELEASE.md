@@ -1,7 +1,9 @@
 # Releasing
 
-Releases are made by hand: there is no CI. A release is a signed git tag plus a GitHub
-release with prebuilt binaries for 7 platforms.
+Releases are built and published by GitHub Actions
+([`.github/workflows/release.yml`](.github/workflows/release.yml)). Pushing a signed
+`v*` tag on `main` builds the binaries for 7 platforms and creates a GitHub release with
+the matching [CHANGELOG.md](CHANGELOG.md) section as release notes.
 
 ## Versioning
 
@@ -10,50 +12,56 @@ release with prebuilt binaries for 7 platforms.
 - Commit messages follow [Conventional Commits](https://www.conventionalcommits.org/),
   e.g. `feat: …`, `fix: …`, `docs: …`, `chore: …`.
 - Every PR with a user-facing change adds a line under `## [Unreleased]` in
-  [CHANGELOG.md](CHANGELOG.md). Mark breaking changes with `**Breaking:**`.
-
-## Prerequisites
-
-- [`gh`](https://cli.github.com/), logged in with push access to `pubky/pubky-tls-proxy`.
-- [`cross`](https://github.com/cross-rs/cross) and a running Docker daemon.
-- `tree`, used by `build.sh` to list the built archives.
-- A GPG key configured for git, to sign the tag.
+  `CHANGELOG.md`. Mark breaking changes with `**Breaking:**`.
 
 ## Steps
 
-In the commands, replace `0.3.0` with the version you're releasing.
+In the commands, replace `0.4.0` with the version you're releasing.
 
-1. **Prepare the release in a PR.** On a branch `release/0.3.0`:
-   - Set `version = "0.3.0"` in `Cargo.toml` and run `cargo check` to update `Cargo.lock`.
+1. **Prepare the release in a PR.** On a branch `release/0.4.0`:
+   - Set `version = "0.4.0"` in `Cargo.toml` and run `cargo check` to update `Cargo.lock`.
    - In `CHANGELOG.md`, move the entries under `## [Unreleased]` to a new
-     `## [0.3.0] - YYYY-MM-DD` section, dated with the release day, and update the
+     `## [0.4.0] - YYYY-MM-DD` section, dated with the release day, and update the
      compare links at the bottom.
-   - Commit as `chore(release): 0.3.0`, open a PR and merge it.
+   - Commit as `chore(release): 0.4.0`, open a PR and merge it.
 
 2. **Tag the merge commit** on `main` with a signed tag and push it:
    ```bash
    git checkout main && git pull
-   git tag -s v0.3.0 -m v0.3.0
-   git push origin v0.3.0
+   git tag -s v0.4.0 -m v0.4.0
+   git push origin v0.4.0
    ```
 
-3. **Build the binaries:**
+3. **Wait for the workflow** and check the release:
    ```bash
-   ./build.sh
+   gh run watch "$(gh run list --workflow release.yml --limit 1 --json databaseId --jq '.[0].databaseId')"
+   gh release view v0.4.0
    ```
-   `build.sh` reads the version from `Cargo.toml`, cross-compiles every target, and writes
-   `target/github-release/pubky-tls-proxy-<platform>-v0.3.0.tar.gz` for `linux-amd64`,
-   `linux-arm64`, `linux-armv7hf`, `linux-armhf`, `osx-amd64`, `osx-arm64` and
-   `windows-amd64`.
+   The workflow:
+   - checks that the tag is on `main` and matches the version in `Cargo.toml`,
+   - takes the release notes from the `## [0.4.0]` section of `CHANGELOG.md` on `main`,
+   - builds `pubky-tls-proxy-<platform>-v0.4.0.tar.gz` for `linux-amd64`, `linux-arm64`,
+     `linux-armv7hf`, `linux-armhf`, `windows-amd64`, `osx-amd64` and `osx-arm64`,
+   - publishes the release with all archives and a `SHA256SUMS` file. Tags with a `-`,
+     such as `v0.4.0-rc.0`, become pre-releases.
 
-4. **Create the GitHub release** with the changelog section as release notes:
-   ```bash
-   awk -v version=0.3.0 '/^\[.+\]: / { exit } /^## \[/ { in_section = ($0 ~ "^## \\[" version "\\]"); next } in_section' \
-     CHANGELOG.md > target/release-notes.md
-   gh release create v0.3.0 target/github-release/*.tar.gz \
-     --verify-tag --title v0.3.0 --notes-file target/release-notes.md
-   ```
-   Add `--prerelease` for release candidates such as `0.4.0-rc.0`.
+## When something fails
 
-5. **Check the release.** Open the release page, then download an archive and check that
-   `pubky-tls-proxy --version` prints the new version.
+- The release is only published if **every** platform builds. If a build fails, fix it
+  in a PR, then run the workflow again for the same tag. Only move the tag if the tag
+  itself is wrong.
+  ```bash
+  gh workflow run release.yml -f tag=v0.4.0
+  ```
+- The same manual run releases tags that were pushed before the workflow existed.
+- Pull requests that change `Cargo.toml`, `Cargo.lock` or the workflow run the build jobs
+  without publishing anything, so a broken target shows up before the release.
+
+## Building a binary locally
+
+For a one-off binary, e.g. to deploy a test build, use
+[`cross`](https://github.com/cross-rs/cross) with Docker:
+
+```bash
+cross build --release --target x86_64-unknown-linux-musl
+```
