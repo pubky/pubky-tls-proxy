@@ -16,11 +16,12 @@ The proxy also keeps your pkarr packet alive: it republishes it every hour and k
 ## Requirements
 
 - A pubky secret key (32 bytes as hex).
-- A **published pkarr packet** for that key, with an `A` record for your server and an `HTTPS` record for port 443. The proxy republishes this packet, but never creates one.
+- A **published pkarr packet** for that key, with an `A` record for your server and an `HTTPS` record for the port the proxy listens on. The proxy republishes this packet, but never creates one.
 
 ## Getting started
 
-- [Set up pubky-tls-proxy with nginx and Let's Encrypt](docs/guides/nginx-letsencrypt.md): a step-by-step guide for Ubuntu and Debian servers.
+- [Set up pubky-tls-proxy with nginx and Let's Encrypt](docs/guides/nginx-letsencrypt.md): a step-by-step guide for Ubuntu and Debian servers. nginx keeps ports 80 and 443, the proxy gets its own port for Pubky clients.
+- [Share ports 80 and 443 between nginx and pubky-tls-proxy](docs/guides/nginx-letsencrypt-shared-port.md): the alternative, if Pubky clients must use port 443.
 - Download a binary from the [latest release](https://github.com/pubky/pubky-tls-proxy/releases/latest/).
 
 ## Documentation
