@@ -6,6 +6,14 @@ All notable changes are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+- Guide: [set up the proxy with nginx and Let's Encrypt](docs/guides/nginx-letsencrypt.md).
+
+### Changed
+- The example systemd unit runs the proxy as an unprivileged `pubky-tls-proxy` user, with
+  the config in `/etc/pubky-tls-proxy/` and the packet cache in `/var/lib/pubky-tls-proxy/`.
+- The configuration reference moved from the README to `docs/configuration.md`.
+
 ## [0.3.1] - 2026-09-28
 
 ### Added
