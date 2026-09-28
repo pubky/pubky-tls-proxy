@@ -10,7 +10,7 @@ use futures_util::future::join_all;
 use pkarr::{errors::PublishError, PublicKey, SignedPacket, Timestamp};
 use std::{net::SocketAddrV4, time::Duration};
 use tokio::{sync::watch, task::JoinHandle};
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 use url::Url;
 
 /// Waits before retrying a failed publish on one network.
@@ -53,6 +53,21 @@ impl PkarrNetwork {
             client,
         })
     }
+
+    /// Waits until a DHT client has joined the network. Returns right away for relays.
+    ///
+    /// Right after start the DHT routing table is empty, so resolving finds nothing and
+    /// publishing fails with "no closest nodes".
+    async fn wait_until_ready(&self) {
+        let Some(dht) = self.client.dht() else {
+            return;
+        };
+        if dht.as_async().bootstrapped().await {
+            debug!("{} bootstrapped", self.name);
+        } else {
+            warn!("Could not bootstrap the {}. Check the bootstrap nodes and that outgoing UDP is allowed.", self.name);
+        }
+    }
 }
 
 /// What a single republish run achieved.
@@ -64,16 +79,27 @@ pub enum RepublishOutcome {
     Republished {
         timestamp: Timestamp,
         succeeded: Vec<&'static str>,
+        /// Networks that rejected the packet because they hold a newer one.
+        have_newer_packet: Vec<&'static str>,
         failed: Vec<&'static str>,
     },
+}
+
+/// Result of publishing to one network.
+enum PublishResult {
+    Published,
+    /// The network rejected the packet with a pkarr concurrency error: it holds a newer or
+    /// conflicting packet. Retrying the same packet can't succeed.
+    NewerPacketExists(PublishError),
+    Failed(PublishError),
 }
 
 /// Resolves the most recent packet of `public_key` from all `networks` and publishes it
 /// unchanged to each of them.
 ///
-/// A failed publish is retried on that network after each of `retry_delays`. Networks are
-/// published to concurrently, so retries on one don't delay the others. Failures are logged
-/// here; the outcome only lists which networks succeeded.
+/// A failed publish is retried on that network after each of `retry_delays`, unless the
+/// network holds a newer packet. Networks are published to concurrently, so retries on one
+/// don't delay the others. Failures are logged here; the outcome only lists the networks.
 pub async fn republish_once(
     public_key: &PublicKey,
     networks: &[PkarrNetwork],
@@ -91,11 +117,19 @@ pub async fn republish_once(
     .await;
 
     let mut succeeded = Vec::new();
+    let mut have_newer_packet = Vec::new();
     let mut failed = Vec::new();
     for (network, result) in networks.iter().zip(publish_results) {
         match result {
-            Ok(()) => succeeded.push(network.name),
-            Err(error) => {
+            PublishResult::Published => succeeded.push(network.name),
+            PublishResult::NewerPacketExists(error) => {
+                info!(
+                    "{} rejected the pkarr packet because it holds a newer one: {error}",
+                    network.name
+                );
+                have_newer_packet.push(network.name);
+            }
+            PublishResult::Failed(error) => {
                 error!(
                     "Republishing pkarr packet to {} failed after {} retries: {error}",
                     network.name,
@@ -109,6 +143,7 @@ pub async fn republish_once(
     RepublishOutcome::Republished {
         timestamp: packet.timestamp(),
         succeeded,
+        have_newer_packet,
         failed,
     }
 }
@@ -125,6 +160,17 @@ async fn resolve_most_recent(
     )
     .await;
 
+    for (network, packet) in networks.iter().zip(&resolved_packets) {
+        match packet {
+            Some(packet) => debug!(
+                "{} returned the pkarr packet signed at {} (Unix µs)",
+                network.name,
+                packet.timestamp().as_u64()
+            ),
+            None => debug!("{} returned no pkarr packet", network.name),
+        }
+    }
+
     resolved_packets
         .into_iter()
         .flatten()
@@ -135,10 +181,10 @@ async fn publish_with_retries(
     network: &PkarrNetwork,
     packet: &SignedPacket,
     retry_delays: &[Duration],
-) -> Result<(), PublishError> {
-    let mut result = network.client.publish(packet, None).await;
+) -> PublishResult {
+    let mut result = publish(network, packet).await;
     for delay in retry_delays {
-        let Err(error) = &result else {
+        let PublishResult::Failed(error) = &result else {
             break;
         };
         warn!(
@@ -147,9 +193,17 @@ async fn publish_with_retries(
             delay.as_secs()
         );
         tokio::time::sleep(*delay).await;
-        result = network.client.publish(packet, None).await;
+        result = publish(network, packet).await;
     }
     result
+}
+
+async fn publish(network: &PkarrNetwork, packet: &SignedPacket) -> PublishResult {
+    match network.client.publish(packet, None).await {
+        Ok(()) => PublishResult::Published,
+        Err(error @ PublishError::Concurrency(_)) => PublishResult::NewerPacketExists(error),
+        Err(error) => PublishResult::Failed(error),
+    }
 }
 
 /// Republishes the packet of a public key in the background: right after start, then every
@@ -194,6 +248,12 @@ async fn republish_periodically(
     interval: Duration,
     mut shutdown_rx: watch::Receiver<bool>,
 ) {
+    let all_networks_ready = join_all(networks.iter().map(PkarrNetwork::wait_until_ready));
+    tokio::select! {
+        _ = all_networks_ready => {}
+        _ = shutdown_rx.changed() => return,
+    }
+
     loop {
         // Both awaits are raced against shutdown, so a run in progress (e.g. waiting for a
         // retry) is cancelled as well.
@@ -216,8 +276,15 @@ fn log_outcome(public_key: &PublicKey, outcome: &RepublishOutcome) {
             "No pkarr packet found for {public_key}, nothing to republish. \
              Publish one first, or check the network connection."
         ),
-        RepublishOutcome::Republished { succeeded, .. } if succeeded.is_empty() => {
+        RepublishOutcome::Republished {
+            succeeded,
+            have_newer_packet,
+            ..
+        } if succeeded.is_empty() && have_newer_packet.is_empty() => {
             error!("Republishing the pkarr packet for {public_key} failed on all networks");
+        }
+        RepublishOutcome::Republished { succeeded, .. } if succeeded.is_empty() => {
+            info!("Nothing republished for {public_key}: the networks hold a newer packet");
         }
         RepublishOutcome::Republished {
             timestamp,
@@ -273,12 +340,13 @@ mod tests {
     }
 
     fn signed_packet(keypair: &Keypair) -> SignedPacket {
+        signed_packet_with_text(keypair, "hello")
+    }
+
+    /// Packets signed later get a later timestamp.
+    fn signed_packet_with_text(keypair: &Keypair, text: &str) -> SignedPacket {
         SignedPacket::builder()
-            .txt(
-                "_demo".try_into().unwrap(),
-                "hello".try_into().unwrap(),
-                300,
-            )
+            .txt("_demo".try_into().unwrap(), text.try_into().unwrap(), 300)
             .sign(keypair)
             .unwrap()
     }
@@ -302,6 +370,7 @@ mod tests {
             RepublishOutcome::Republished {
                 timestamp: packet.timestamp(),
                 succeeded: vec!["DHT"],
+                have_newer_packet: vec![],
                 failed: vec![],
             }
         );
@@ -339,8 +408,23 @@ mod tests {
             RepublishOutcome::Republished {
                 timestamp: packet.timestamp(),
                 succeeded: vec!["DHT"],
+                have_newer_packet: vec![],
                 failed: vec!["relays"],
             }
         );
+    }
+
+    #[tokio::test]
+    async fn network_holding_a_newer_packet_is_not_retried() {
+        let dht = LocalDht::start().await;
+        let keypair = Keypair::random();
+        let older_packet = signed_packet_with_text(&keypair, "older");
+        let newer_packet = signed_packet_with_text(&keypair, "newer");
+        dht.publish(&newer_packet).await;
+
+        let result =
+            publish_with_retries(&dht.network(), &older_packet, &[Duration::from_secs(3600)]).await;
+
+        assert!(matches!(result, PublishResult::NewerPacketExists(_)));
     }
 }

@@ -230,17 +230,20 @@ fn unused_localhost_addr() -> SocketAddr {
 
 /// Publishes the proxy's address for `keypair` and returns a Pubky-capable HTTP client.
 async fn pubky_http_client_for(keypair: &Keypair, proxy_port: u16) -> Result<reqwest::Client> {
-    let pkarr_client = pkarr::Client::builder().build()?;
     let root_name = Name::new(".")?;
-
     let mut svcb = SVCB::new(0, root_name.clone());
     svcb.set_port(proxy_port);
     let packet = pkarr::SignedPacket::builder()
         .a(root_name.clone(), "127.0.0.1".parse()?, 300)
         .https(root_name, svcb, 60 * 60)
         .build(keypair)?;
-    pkarr_client.publish(&packet, None).await?;
 
+    // Publish through relays only: with both networks, `publish` returns whichever finishes
+    // first, which is often a DHT error while the DHT is still bootstrapping.
+    let relays_client = pkarr::Client::builder().no_dht().build()?;
+    relays_client.publish(&packet, None).await?;
+
+    let pkarr_client = pkarr::Client::builder().build()?;
     Ok(reqwest::ClientBuilder::from(pkarr_client).build()?)
 }
 

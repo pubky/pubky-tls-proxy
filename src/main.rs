@@ -1,9 +1,10 @@
 use anyhow::{Context, Result};
 use clap::Parser;
 use pkarr::Keypair;
-use std::{fs, path::Path, time::Duration};
+use std::{fs, io::IsTerminal, path::Path, time::Duration};
 use tokio::signal;
-use tracing::{info, Level};
+use tracing::info;
+use tracing_subscriber::EnvFilter;
 
 mod cli;
 mod config;
@@ -24,7 +25,7 @@ const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    tracing_subscriber::fmt().with_max_level(Level::INFO).init();
+    init_logging();
 
     let settings = Settings::load(cli::Args::parse())?;
     match &settings.config_file {
@@ -64,6 +65,16 @@ async fn main() -> Result<()> {
     info!("Shutdown complete.");
 
     Ok(())
+}
+
+/// Logs at info level unless `RUST_LOG` says otherwise (e.g. `RUST_LOG=pubky_tls_proxy=debug`).
+/// Colours are only used on a terminal, so they don't end up in e.g. the systemd journal.
+fn init_logging() {
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+    tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_ansi(std::io::stdout().is_terminal())
+        .init();
 }
 
 fn log_proxy_settings(proxy: &Proxy, settings: &Settings) {
