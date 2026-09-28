@@ -5,7 +5,7 @@ arguments override the config file, and the config file overrides the defaults.
 Run `pubky-tls-proxy --help` for all arguments.
 
 ```bash
-pubky-tls-proxy [--config <FILE>] [--secret-file <FILE>] [--listen-addr <ADDR>]... [--http-backend-addr <ADDR>] [--https-backend-addr <ADDR>] [--no-proxy-protocol] ...
+pubky-tls-proxy [--config <FILE>] [--secret-file <FILE>] [--listen-addr <ADDR>]... [--http-backend-addr <ADDR>] [--https-backend-addr <ADDR>] [--no-plain-http] [--no-proxy-protocol] ...
 ```
 
 ## Arguments
@@ -15,6 +15,7 @@ pubky-tls-proxy [--config <FILE>] [--secret-file <FILE>] [--listen-addr <ADDR>].
 - `--listen-addr`: Address to listen on. Can be repeated, e.g. for ports 80 and 443 [default: 0.0.0.0:8443].
 - `--http-backend-addr`: Backend for plain HTTP and decrypted Pubky TLS traffic [default: 127.0.0.1:6286]. `--backend-addr` still works as an alias.
 - `--https-backend-addr`: Backend for regular HTTPS traffic. If it isn't set, regular HTTPS connections are closed.
+- `--no-plain-http`: Close incoming plain HTTP connections without contacting the backend. Decrypted Pubky TLS still goes to the HTTP backend. Plain HTTP is enabled by default.
 - `--no-proxy-protocol`: Don't send a [PROXY protocol](https://www.haproxy.org/download/2.9/doc/proxy-protocol.txt) header to the backends. See [PROXY protocol](#proxy-protocol).
 - `--no-republish`: Don't [republish](#republishing-the-pkarr-packet) the pkarr packet.
 - `--republish-interval-secs`: Seconds between two republish runs [default: 3600].
@@ -35,6 +36,7 @@ secret_file = "secret"
 listen_addrs = ["0.0.0.0:8443"]
 http_backend_addr = "127.0.0.1:6286"
 # https_backend_addr = "127.0.0.1:6443"   # not set: regular HTTPS is rejected
+plain_http = true                          # false: reject incoming plain HTTP
 proxy_protocol = true
 
 [republish]
@@ -49,6 +51,8 @@ relays = ["https://pkarr.pubky.app", "https://pkarr.pubky.org"]
 ```
 
 The command line can only switch things off (`--no-...`). If the config file says `proxy_protocol = false`, no flag turns it back on.
+
+To dedicate a listen port to Pubky TLS, set `plain_http = false` and leave `https_backend_addr` unset. In a shared-port setup with HTTP redirects or Let's Encrypt HTTP-01 challenges, keep plain HTTP enabled and handle those requests in the backend.
 
 ## Republishing the pkarr packet
 
@@ -97,4 +101,4 @@ To generate a new secret key:
 openssl rand -hex 32 > secret
 ```
 
-The proxy doesn't publish a pkarr packet for a new key. Publish one with an `A` record and an `HTTPS` record for port 443 before you start the proxy.
+The proxy doesn't publish a pkarr packet for a new key. Publish one with an `A` record for the server and an `HTTPS` record for the proxy's listen port before you start it. That's port 8443 in the [recommended nginx guide](guides/nginx-letsencrypt.md), or 443 in the [shared-port guide](guides/nginx-letsencrypt-shared-port.md).

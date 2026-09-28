@@ -2,7 +2,7 @@
 //!
 //! | Incoming traffic | Handling                                     | Backend              |
 //! |------------------|----------------------------------------------|----------------------|
-//! | Plain HTTP       | forwarded as is                              | `http_backend_addr`  |
+//! | Plain HTTP       | forwarded as is, or rejected if disabled    | `http_backend_addr`  |
 //! | Pubky TLS        | TLS terminated with the pkarr keypair        | `http_backend_addr`  |
 //! | Regular HTTPS    | forwarded as is, the backend terminates TLS  | `https_backend_addr` |
 
@@ -34,6 +34,8 @@ pub struct ProxyConfig {
     pub http_backend_addr: SocketAddr,
     /// Receives regular HTTPS traffic. Without it, regular HTTPS connections are closed.
     pub https_backend_addr: Option<SocketAddr>,
+    /// Whether incoming plain HTTP is forwarded to the HTTP backend.
+    pub plain_http: bool,
     /// Whether backend connections start with a PROXY protocol v1 header.
     pub send_proxy_protocol: bool,
 }
@@ -43,6 +45,7 @@ struct Routes {
     pubky_tls_acceptor: TlsAcceptor,
     http_backend: Backend,
     https_backend: Option<Backend>,
+    plain_http: bool,
 }
 
 /// A running proxy. Listens until [`Proxy::shutdown`] is called.
@@ -86,6 +89,7 @@ impl Proxy {
                 addr,
                 send_proxy_protocol: config.send_proxy_protocol,
             }),
+            plain_http: config.plain_http,
         });
 
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
@@ -207,6 +211,10 @@ async fn handle_connection(
 
     match detected.traffic {
         IncomingTraffic::PlainHttp => {
+            if !routes.plain_http {
+                debug!("{client_addr}: plain HTTP rejected");
+                return Ok(());
+            }
             info!("{client_addr}: plain HTTP -> {}", routes.http_backend.addr);
             forwarding::forward_plain_http(client, routes.http_backend, addrs).await
         }
@@ -222,7 +230,8 @@ async fn handle_connection(
         }
         IncomingTraffic::RegularTls => {
             let Some(https_backend) = routes.https_backend else {
-                anyhow::bail!("Regular HTTPS received, but no HTTPS backend is configured. Closing connection.");
+                debug!("{client_addr}: regular HTTPS rejected, no HTTPS backend configured");
+                return Ok(());
             };
             info!("{client_addr}: regular HTTPS -> {}", https_backend.addr);
             forwarding::forward_regular_tls(client, https_backend, addrs).await

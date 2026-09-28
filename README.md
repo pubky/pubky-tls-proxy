@@ -3,7 +3,7 @@
 [![GitHub Release](https://img.shields.io/github/v/release/pubky/pubky-tls-proxy)](https://github.com/pubky/pubky-tls-proxy/releases/latest/)
 [![Telegram Chat Group](https://img.shields.io/badge/Chat-Telegram-violet)](https://t.me/pubkycore)
 
-A proxy that terminates [raw public key TLS (RFC 7250)](https://datatracker.ietf.org/doc/html/rfc7250), which Pubky uses, in front of a regular web server such as nginx. The same ports serve Pubky clients, browsers over HTTPS and plain HTTP.
+A proxy that terminates [raw public key TLS (RFC 7250)](https://datatracker.ietf.org/doc/html/rfc7250), which Pubky uses, in front of a regular web server such as nginx. Pubky clients can use a separate port or share ports 80/443 with browsers.
 
 | Incoming traffic | What the proxy does                                  | Forwarded to           |
 |------------------|------------------------------------------------------|------------------------|

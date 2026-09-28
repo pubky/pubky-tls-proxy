@@ -41,6 +41,10 @@ pub struct Args {
     #[arg(long, value_name = "ADDR")]
     pub https_backend_addr: Option<SocketAddr>,
 
+    /// Reject incoming plain HTTP without forwarding it to the HTTP backend.
+    #[arg(long)]
+    pub no_plain_http: bool,
+
     /// Don't send a PROXY protocol v1 header to the backends.
     #[arg(long)]
     pub no_proxy_protocol: bool,
