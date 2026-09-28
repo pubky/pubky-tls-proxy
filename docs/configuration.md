@@ -97,4 +97,4 @@ To generate a new secret key:
 openssl rand -hex 32 > secret
 ```
 
-The proxy doesn't publish a pkarr packet for a new key. Publish one with an `A` record and an `HTTPS` record for port 443 before you start the proxy.
+The proxy doesn't publish a pkarr packet for a new key. Publish one with an `A` record for the server and an `HTTPS` record for the proxy's listen port before you start it. That's port 8443 in the [recommended nginx guide](guides/nginx-letsencrypt.md), or 443 in the [shared-port guide](guides/nginx-letsencrypt-shared-port.md).

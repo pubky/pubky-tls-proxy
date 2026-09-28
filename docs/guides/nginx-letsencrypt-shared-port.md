@@ -1,53 +1,29 @@
 # Share ports 80 and 443 between nginx and pubky-tls-proxy
 
-This guide is the alternative to [Set up pubky-tls-proxy with nginx and Let's Encrypt](nginx-letsencrypt.md), where the proxy has its own port. Here, browsers and Pubky clients use the **same port 443**. Use it if your Pubky users sit behind firewalls that only allow port 443, or if you can't open another port. It's a bit more work: nginx moves off the public ports, and you configure its HTTPS listener yourself.
+This is the alternative to the [simpler nginx and Let's Encrypt guide](nginx-letsencrypt.md), where Pubky clients connect to the proxy on port 8443. Here, **browsers and Pubky clients both use port 443**. Choose this if clients cannot reach port 8443.
 
-The website is reachable in two ways:
-
-- **Browsers** open `https://example.com` and get a regular Let's Encrypt certificate.
-- **Pubky clients** open `https://<your public key>` and connect with Pubky TLS.
-
-Both end up on the same nginx site. pubky-tls-proxy owns the public ports 80 and 443 and routes each connection. nginx only listens on localhost.
-
-```
-                            ┌───────────────── your server ──────────────────┐
-  browser ── HTTPS ───┐     │                        ┌─> 127.0.0.1:8443 ─┐     │
-  browser ── HTTP ────┼──> :80/:443  pubky-tls-proxy ┤   (nginx, TLS)    ├─> website
-  Pubky client ───────┘     │                        └─> 127.0.0.1:8080 ─┘     │
-      (Pubky TLS)           │                            (nginx, plain HTTP)   │
-                            └────────────────────────────────────────────────┘
+```text
+Browser ── HTTP/HTTPS ─┐                 ┌─> nginx 127.0.0.1:8443 (HTTPS) ─┐
+                      ├─> proxy :80/:443 ┤                                   ├─> website
+Pubky client ──────────┘                 └─> nginx 127.0.0.1:8080 (HTTP) ────┘
 ```
 
-The proxy decrypts Pubky TLS itself and passes regular HTTPS through untouched, so nginx terminates it with the Let's Encrypt certificate. Every connection to nginx starts with a [PROXY protocol](../configuration.md#proxy-protocol) header, so nginx still sees the real client addresses.
-
-The commands were tested on Debian 13 and work the same on Debian 12 and Ubuntu 24.04.
+The proxy decrypts Pubky TLS but passes browser HTTPS through untouched, so nginx handles the Let's Encrypt certificate. nginx only listens on localhost. This setup was tested on Debian 13; the same commands apply to Debian 12 and Ubuntu 24.04.
 
 ## Before you begin
 
-You need:
+You need a server with `sudo` access, TCP ports **80 and 443** open to the public, and a domain whose A record points to your server. This guide calls that domain `example.com`: **replace it with yours in every file name, command, and configuration example**.
 
-- A server running **Ubuntu 24.04, Debian 12 or Debian 13** with a public IPv4 address, and a user with `sudo`.
-- **Ports 80 and 443 (TCP)** open in the server's firewall and in your cloud provider's firewall.
-- A **domain** whose `A` record points to the server, e.g. `example.com`.
-- Your **pubky secret key**: a file with 32 bytes as hex (64 characters).
-- A **published pkarr packet** for that key, with an `A` record pointing to the server and an `HTTPS` record for port 443. The proxy keeps the packet alive, but doesn't create it.
-
-Copy your secret key to your home directory on the server, e.g. from your computer:
-
-```bash
-scp secret user@example.com:~/secret
-```
-
-Nothing else may use ports 80 and 443 on the server. This guide installs nginx and moves it off these ports.
+You also need your Pubky secret key (32 bytes as hex) and an **already published pkarr packet** for that key, with an A record pointing to the server and an HTTPS record for **port 443**. The proxy republishes existing packets; it doesn't create one. Copy your secret file to your home directory on the server, for example `scp secret your-user@example.com:~/secret`. Keep an offline backup.
 
 ## 1. Install nginx and certbot
 
 ```bash
 sudo apt update
-sudo apt install -y nginx certbot
+sudo apt install nginx certbot nano curl
 ```
 
-nginx's default site listens on port 80, which the proxy needs. Turn it off:
+nginx's default site uses port 80, which the proxy needs. Remove its **enabled link** and reload nginx:
 
 ```bash
 sudo rm /etc/nginx/sites-enabled/default
@@ -56,34 +32,34 @@ sudo systemctl reload nginx
 
 ## 2. Create the website
 
-Set your domain once. The following steps use it:
+Make a directory and a test page:
 
 ```bash
-DOMAIN=example.com
+sudo mkdir -p /var/www/example.com
+sudo nano /var/www/example.com/index.html
 ```
 
-> If you open a new terminal later, run this line again.
+Paste this page, replacing `example.com` with your domain. Save in nano with **Ctrl+O**, Enter; exit with **Ctrl+X**:
 
-Create a page to serve:
-
-```bash
-sudo mkdir -p /var/www/$DOMAIN
-echo "<h1>Hello from $DOMAIN</h1>" | sudo tee /var/www/$DOMAIN/index.html
+```html
+<h1>Hello from example.com</h1>
 ```
 
-Create the nginx site. For now it only serves plain HTTP on `127.0.0.1:8080`, which is where the proxy sends plain HTTP and decrypted Pubky TLS:
+nginx must first serve **plain HTTP** so Let's Encrypt can check your domain. Open a new nginx site:
 
 ```bash
-sudo tee /etc/nginx/sites-available/$DOMAIN > /dev/null <<'EOF'
-# All traffic arrives through pubky-tls-proxy, which starts every connection with a
-# PROXY protocol header. Take the client address from there.
-set_real_ip_from 127.0.0.1;
-real_ip_header proxy_protocol;
+sudo nano /etc/nginx/sites-available/example.com
+```
 
+Paste this, replacing `example.com` in the `root` line. A browser's Host header isn't restricted yet; step 6 adds the domain-specific redirect after the certificate exists.
+
+```nginx
 server {
-    # Plain HTTP and decrypted Pubky TLS.
     listen 127.0.0.1:8080 default_server proxy_protocol;
     server_name _;
+
+    set_real_ip_from 127.0.0.1;
+    real_ip_header proxy_protocol;
 
     root /var/www/example.com;
     index index.html;
@@ -91,72 +67,82 @@ server {
         try_files $uri $uri/ =404;
     }
 }
-EOF
-sudo sed -i "s/example\.com/$DOMAIN/g" /etc/nginx/sites-available/$DOMAIN
-sudo ln -s /etc/nginx/sites-available/$DOMAIN /etc/nginx/sites-enabled/$DOMAIN
-sudo nginx -t && sudo systemctl reload nginx
+```
+
+Save and exit. Enable the site, then test and reload nginx:
+
+```bash
+sudo ln -s /etc/nginx/sites-available/example.com /etc/nginx/sites-enabled/example.com
+sudo nginx -t
+sudo systemctl reload nginx
 ```
 
 ## 3. Install pubky-tls-proxy
 
-Download the [latest release](https://github.com/pubky/pubky-tls-proxy/releases/latest) for your server's architecture, check it and install it:
+Go to the [releases page](https://github.com/pubky/pubky-tls-proxy/releases/latest) and find the latest Linux archive for your server. The commands here use **v0.3.1 on linux-amd64**; change the version and platform in the names and URLs if needed.
 
 ```bash
-VERSION=0.3.1
-ARCH=$(dpkg --print-architecture)
-RELEASE=https://github.com/pubky/pubky-tls-proxy/releases/download/v$VERSION
-cd "$(mktemp -d)"
-
-curl -fsSLO $RELEASE/pubky-tls-proxy-linux-$ARCH-v$VERSION.tar.gz
-curl -fsSLO $RELEASE/SHA256SUMS
+mkdir -p ~/pubky-tls-proxy-download
+cd ~/pubky-tls-proxy-download
+curl -fLO https://github.com/pubky/pubky-tls-proxy/releases/download/v0.3.1/pubky-tls-proxy-linux-amd64-v0.3.1.tar.gz
+curl -fLO https://github.com/pubky/pubky-tls-proxy/releases/download/v0.3.1/SHA256SUMS
 sha256sum --ignore-missing -c SHA256SUMS
+```
 
-tar -xzf pubky-tls-proxy-linux-$ARCH-v$VERSION.tar.gz
-sudo install -m 0755 pubky-tls-proxy-linux-$ARCH-v$VERSION/pubky-tls-proxy /usr/local/bin/
+The checksum must print `OK`. Extract and install the binary:
+
+```bash
+tar -xzf pubky-tls-proxy-linux-amd64-v0.3.1.tar.gz
+sudo cp pubky-tls-proxy-linux-amd64-v0.3.1/pubky-tls-proxy /usr/local/bin/pubky-tls-proxy
+sudo chmod 755 /usr/local/bin/pubky-tls-proxy
 pubky-tls-proxy --version
 ```
 
-`sha256sum` must print `OK` for the archive.
-
 ## 4. Configure the proxy
 
-Create a system user for the proxy and put the secret key where only root and that user can read it:
+Create a user for the proxy and protect the secret file:
 
 ```bash
 sudo useradd --system --no-create-home --shell /usr/sbin/nologin pubky-tls-proxy
-sudo install -d -m 0750 -o root -g pubky-tls-proxy /etc/pubky-tls-proxy
-sudo install -m 0640 -o root -g pubky-tls-proxy ~/secret /etc/pubky-tls-proxy/secret
-rm ~/secret
+sudo mkdir -p /etc/pubky-tls-proxy
+sudo chown root:pubky-tls-proxy /etc/pubky-tls-proxy
+sudo cp ~/secret /etc/pubky-tls-proxy/secret
+sudo chown root:pubky-tls-proxy /etc/pubky-tls-proxy/secret
+sudo chmod 640 /etc/pubky-tls-proxy/secret
+sudo chmod 750 /etc/pubky-tls-proxy
 ```
 
-Write the config file:
+After confirming the copy is in place, run `rm ~/secret` to remove the extra server copy (keep your offline backup).
+
+Open the config file:
 
 ```bash
-sudo tee /etc/pubky-tls-proxy/config.toml > /dev/null <<'EOF'
-# Relative to this file's directory.
-secret_file = "secret"
+sudo nano /etc/pubky-tls-proxy/config.toml
+```
 
-# The proxy owns the public ports.
+Paste this and save it. The proxy owns ports 80 and 443. nginx receives decrypted Pubky TLS on port 8080 and regular, still-encrypted HTTPS on port 8443 (after step 6).
+
+```toml
+secret_file = "secret"
 listen_addrs = ["0.0.0.0:80", "0.0.0.0:443"]
-# nginx: plain HTTP and decrypted Pubky TLS.
 http_backend_addr = "127.0.0.1:8080"
-# nginx: regular HTTPS, set up in step 6.
 https_backend_addr = "127.0.0.1:8443"
 
 [republish]
-# /etc is read-only for the service, systemd creates this directory.
 cache_file = "/var/lib/pubky-tls-proxy/pkarr-packet.cache"
-EOF
 ```
-
-See [Configuration](../configuration.md) for all settings.
 
 ## 5. Start the proxy
 
-Create the systemd service. It runs the proxy as the `pubky-tls-proxy` user and only allows it to bind the ports and write its cache:
+Open the systemd service file:
 
 ```bash
-sudo tee /etc/systemd/system/pubky-tls-proxy.service > /dev/null <<'EOF'
+sudo nano /etc/systemd/system/pubky-tls-proxy.service
+```
+
+Paste the following and save. Unlike the own-port setup, this service needs permission to bind ports **below 1024**:
+
+```ini
 [Unit]
 Description=pubky-tls-proxy - routes Pubky TLS, HTTPS and HTTP to a web server
 Documentation=https://github.com/pubky/pubky-tls-proxy
@@ -170,61 +156,54 @@ ExecStart=/usr/local/bin/pubky-tls-proxy --config /etc/pubky-tls-proxy/config.to
 Restart=on-failure
 RestartSec=5s
 
-# Bind ports 80 and 443 without running as root.
 AmbientCapabilities=CAP_NET_BIND_SERVICE
 CapabilityBoundingSet=CAP_NET_BIND_SERVICE
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
 PrivateTmp=true
-# Writable /var/lib/pubky-tls-proxy for the pkarr packet cache.
 StateDirectory=pubky-tls-proxy
 
 [Install]
 WantedBy=multi-user.target
-EOF
-sudo systemctl daemon-reload
-sudo systemctl enable --now pubky-tls-proxy
 ```
 
-Check the log:
+Start it and inspect the log:
 
 ```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now pubky-tls-proxy
 sudo journalctl -u pubky-tls-proxy -n 30 --no-pager
 ```
 
-You should see:
+Look for your public key, `Listening on 0.0.0.0:80`, `Listening on 0.0.0.0:443` and a successful republish. Republish may take a few seconds; check the log again if needed.
 
-- `Using public key: …` with **your** public key,
-- `Listening on 0.0.0.0:80` and `Listening on 0.0.0.0:443`,
-- after a few seconds, `Republished pkarr packet for … to: …`. If it's not there yet, wait a moment and run the command again.
+## 6. Get the certificate and enable browser HTTPS
 
-If the log says `No pkarr packet found`, your packet isn't published yet. See [Troubleshooting](#troubleshooting).
-
-## 6. Get a Let's Encrypt certificate and turn on HTTPS
-
-Let's Encrypt checks your domain over plain HTTP. The request goes through the proxy to nginx, which serves the challenge from the website directory. certbot asks for an email address and for you to accept the terms of service:
+Let's Encrypt checks your domain on port 80. The proxy forwards that plain HTTP request to nginx, which serves the challenge from the website directory:
 
 ```bash
-sudo certbot certonly --webroot -w /var/www/$DOMAIN -d $DOMAIN --deploy-hook "systemctl reload nginx"
+sudo certbot certonly --webroot -w /var/www/example.com -d example.com --deploy-hook "systemctl reload nginx"
 ```
 
-certbot renews the certificate automatically and reloads nginx afterwards (`--deploy-hook`).
+Replace `example.com` in both places. certbot asks for an email address and to accept its terms. The deploy hook reloads nginx after future renewals.
 
-Now add the HTTPS listener on `127.0.0.1:8443`, where the proxy sends regular HTTPS. Plain HTTP requests for the domain are redirected to HTTPS. Pubky clients use the public key as host name, so they're never redirected:
+Now edit the nginx site again:
 
 ```bash
-sudo tee /etc/nginx/sites-available/$DOMAIN > /dev/null <<'EOF'
-# All traffic arrives through pubky-tls-proxy, which starts every connection with a
-# PROXY protocol header. Take the client address from there.
-set_real_ip_from 127.0.0.1;
-real_ip_header proxy_protocol;
+sudo nano /etc/nginx/sites-available/example.com
+```
 
+**Replace its entire contents** with the following. Replace **every** `example.com`, including in the certificate paths. nginx now terminates regular HTTPS on localhost:8443; the second block redirects only ordinary HTTP requests for your domain. Pubky requests have the public key as Host, so they aren't redirected.
+
+```nginx
 server {
-    # Plain HTTP, decrypted Pubky TLS and regular HTTPS.
     listen 127.0.0.1:8080 default_server proxy_protocol;
     listen 127.0.0.1:8443 default_server ssl proxy_protocol;
     server_name _;
+
+    set_real_ip_from 127.0.0.1;
+    real_ip_header proxy_protocol;
 
     ssl_certificate     /etc/letsencrypt/live/example.com/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/example.com/privkey.pem;
@@ -236,7 +215,6 @@ server {
     }
 }
 
-# Redirect plain HTTP for the domain to HTTPS, except the Let's Encrypt challenges.
 server {
     listen 127.0.0.1:8080 proxy_protocol;
     server_name example.com;
@@ -248,99 +226,64 @@ server {
         return 301 https://$host$request_uri;
     }
 }
-EOF
-sudo sed -i "s/example\.com/$DOMAIN/g" /etc/nginx/sites-available/$DOMAIN
-sudo nginx -t && sudo systemctl reload nginx
 ```
 
-## 7. Check that everything works
-
-Browsers: plain HTTP redirects to HTTPS, and HTTPS returns your page with a valid certificate:
+Save, check and reload nginx:
 
 ```bash
-curl -sI http://$DOMAIN | head -n 1
-curl -s https://$DOMAIN
+sudo nginx -t
+sudo systemctl reload nginx
 ```
 
-Pubky clients: the proxy answers with your public key instead of a certificate. This needs OpenSSL 3.2 or newer (Debian 13). On Debian 12 and Ubuntu 24.04, run it from another machine with a newer OpenSSL:
+## 7. Verify the setup
+
+Replace `example.com` with your domain:
 
 ```bash
-echo | openssl s_client -connect $DOMAIN:443 -enable_server_rpk 2>/dev/null | grep "raw public key negotiated"
-```
-
-It prints `Server-to-client raw public key negotiated`.
-
-Your pkarr packet is published. This reads your public key from the proxy's log and asks a relay for the packet:
-
-```bash
-PUBLIC_KEY=$(sudo journalctl -u pubky-tls-proxy -o cat | grep -oP 'Using public key: \K\w+' | tail -n 1)
-curl -s -o /dev/null -w "%{http_code}\n" https://pkarr.pubky.org/$PUBLIC_KEY
-```
-
-It prints `200`.
-
-nginx logs the real client addresses, not `127.0.0.1`:
-
-```bash
-sudo tail -n 3 /var/log/nginx/access.log
-```
-
-For the `curl` commands above, run on the server, that's the server's own public address. A line with `""` and `400` from `127.0.0.1` is the `openssl` check, which connects without sending a request.
-
-Certificate renewal works through the proxy:
-
-```bash
+curl -I http://example.com
+curl https://example.com
 sudo certbot renew --dry-run
 ```
 
-## Serve an app instead of static files
+HTTP should redirect to HTTPS, the HTTPS request should show your page with a valid certificate, and the renewal test should succeed.
 
-To put an app behind the proxy, e.g. one listening on `127.0.0.1:3000`, replace the `root`, `index` and `location / { … }` lines of the first `server` block with:
+To check Pubky TLS, use OpenSSL **3.2 or newer** (Debian 13 has it; Debian 12 and Ubuntu 24.04 need another computer with newer OpenSSL):
 
-```nginx
-    location / {
-        proxy_pass http://127.0.0.1:3000;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-Proto $scheme;
-    }
+```bash
+openssl s_client -connect example.com:443 -enable_server_rpk
 ```
 
-Keep the `location /.well-known/acme-challenge/` block in the second `server` block, so certificate renewals keep working. Requests from Pubky clients arrive with your public key as `Host`.
+Look for `Server-to-client raw public key negotiated`. This doesn't verify that the key is yours; check it with a Pubky-capable client. The proxy's public key appears in `sudo journalctl -u pubky-tls-proxy -n 30 --no-pager`, and you can inspect its packet at `https://pkarr.pubky.org/<your-public-key>`.
+
+## Serve an app instead of static files
+
+If your app listens on `127.0.0.1:3000`, edit the **first** nginx server block in step 6. Replace the `root`, `index` and `location /` lines with:
+
+```nginx
+location / {
+    proxy_pass http://127.0.0.1:3000;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-Proto $scheme;
+}
+```
+
+Keep the `/.well-known/acme-challenge/` block in the second server block, so certificate renewals work.
 
 ## Troubleshooting
 
-**The proxy doesn't start: `Failed to bind to listen address 0.0.0.0:80`.**
-Something else uses the port, usually nginx's default site. Run `sudo ss -tlnp | grep -E ':(80|443) '` to find it. Make sure `/etc/nginx/sites-enabled/default` is gone and that no other nginx site listens on `80` or `443`.
+- **The proxy can't bind port 80 or 443:** Something else uses it, often nginx's default site. Run `sudo ss -tlnp` and check that no nginx site listens on a public port.
+- **Pubky clients can't connect:** Your pkarr packet must contain an A record for the server and an HTTPS record for port **443**. Publish the correct packet; clients may cache an old one for up to an hour.
+- **`No pkarr packet found`:** The proxy only republishes; it doesn't create packets. Publish one before starting it.
+- **DHT errors, but relay republishing works:** If your network blocks DHT (UDP), add `[pkarr]` and `bootstrap_nodes = []` to the config. Restart the proxy. The relays publish to the DHT for you.
+- **`502 Bad Gateway`:** nginx must listen on `127.0.0.1:8080`. Check `sudo nginx -t` and `sudo systemctl status nginx`.
+- **Browser HTTPS disconnects:** Check that nginx listens on `127.0.0.1:8443` with `ssl proxy_protocol` and that the proxy config names it as `https_backend_addr`.
+- **certbot can't reach the challenge:** Check the domain's A record, open TCP port 80, and test `curl -I http://example.com`.
 
-**The log says `No pkarr packet found … Publish one first`.**
-The proxy only republishes existing packets. Publish a packet for your key with an `A` record for the server and an `HTTPS` record for port 443, then restart the proxy with `sudo systemctl restart pubky-tls-proxy`.
-
-**The log shows DHT errors, but `Republished … to: relays`.**
-Some networks block mainline DHT traffic (UDP), e.g. through a restrictive cloud firewall. The relays publish your packet to the DHT for you. To stop the errors, turn off the DHT in `/etc/pubky-tls-proxy/config.toml` and restart the proxy:
-
-```toml
-[pkarr]
-bootstrap_nodes = []
-```
-
-**`502 Bad Gateway`.**
-nginx isn't listening on `127.0.0.1:8080`. Check `sudo nginx -t` and `sudo systemctl status nginx`.
-
-**HTTPS connections are closed right away.**
-nginx isn't listening on `127.0.0.1:8443` yet. Finish step 6.
-
-**certbot fails with a connection or timeout error.**
-Check that the domain's `A` record points to the server (`dig +short $DOMAIN`), that port 80 is open in every firewall, and that `curl -sI http://$DOMAIN` works.
-
-**nginx shows `broken header` errors.**
-Something connects to nginx without going through the proxy. Only the proxy may connect to `127.0.0.1:8080` and `127.0.0.1:8443`.
-
-**More details in the log.**
-Add `Environment=RUST_LOG=pubky_tls_proxy=debug` to the `[Service]` section, then run `sudo systemctl daemon-reload` and `sudo systemctl restart pubky-tls-proxy`.
+For more detail, add `Environment=RUST_LOG=pubky_tls_proxy=debug` under `[Service]` in the systemd unit. Then run `sudo systemctl daemon-reload` and `sudo systemctl restart pubky-tls-proxy`.
 
 ## Next steps
 
-- [Configuration](../configuration.md): every setting of the proxy.
-- Update the proxy: repeat step 3 with the new `VERSION`, then `sudo systemctl restart pubky-tls-proxy`.
-- [Set up pubky-tls-proxy with nginx and Let's Encrypt](nginx-letsencrypt.md): the simpler setup, with the proxy on its own port.
+- [Configuration](../configuration.md) covers all settings.
+- To update the proxy, download the newer version as in step 3. Stop the service with `sudo systemctl stop pubky-tls-proxy` before copying over the running binary; then start it with `sudo systemctl start pubky-tls-proxy`.
+- To leave nginx on public ports 80/443 and run the proxy on 8443 instead, use the [simpler guide](nginx-letsencrypt.md).

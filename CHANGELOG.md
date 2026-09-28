@@ -12,6 +12,8 @@ All notable changes are documented here. The format is based on
 - Guide: [share ports 80 and 443 between nginx and the proxy](docs/guides/nginx-letsencrypt-shared-port.md).
 
 ### Changed
+- Reworked both nginx and Let's Encrypt guides for manual setup with a text editor
+  instead of shell-generated configuration files.
 - The example systemd unit runs the proxy as an unprivileged `pubky-tls-proxy` user, with
   the config in `/etc/pubky-tls-proxy/` and the packet cache in `/var/lib/pubky-tls-proxy/`.
   For ports below 1024 it needs `CAP_NET_BIND_SERVICE`, see the comment in the unit.
