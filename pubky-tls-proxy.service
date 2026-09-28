@@ -1,19 +1,29 @@
-# https://github.com/pubky/pubky-tls-proxy/blob/master/pubky-tls-proxy.service
+# https://github.com/pubky/pubky-tls-proxy/blob/main/pubky-tls-proxy.service
+#
+# Runs the proxy as the unprivileged user `pubky-tls-proxy` with the config in
+# /etc/pubky-tls-proxy/config.toml. See docs/guides/nginx-letsencrypt.md.
 [Unit]
-Description=pubky-tls-proxy - TLS terminating proxy for raw public key TLS RFC 7250 which is used in Pubky
-After=network-online.target
+Description=pubky-tls-proxy - routes Pubky TLS, HTTPS and HTTP to a web server
+Documentation=https://github.com/pubky/pubky-tls-proxy
+After=network-online.target nginx.service
+Wants=network-online.target
 
 [Service]
-# Update the binary path and the config file. See the README for the config file format.
-# A relative secret_file in the config file is resolved against the config file's directory.
-#
-# Without a config file, pass the settings as arguments instead, e.g. to forward to a
-# Pubky homeserver directly (which doesn't understand the PROXY protocol):
-# ExecStart=/usr/local/bin/pubky-tls-proxy --secret-file=/etc/pubky-tls-proxy/secret --listen-addr=0.0.0.0:8443 --http-backend-addr=127.0.0.1:6286 --no-proxy-protocol
-ExecStart=/usr/local/bin/pubky-tls-proxy --config=/etc/pubky-tls-proxy/config.toml
-Environment="RUST_BACKTRACE=full"
+User=pubky-tls-proxy
+Group=pubky-tls-proxy
+ExecStart=/usr/local/bin/pubky-tls-proxy --config /etc/pubky-tls-proxy/config.toml
 Restart=on-failure
 RestartSec=5s
+
+# Bind ports 80 and 443 without running as root.
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+# Writable /var/lib/pubky-tls-proxy for the pkarr packet cache.
+StateDirectory=pubky-tls-proxy
 
 [Install]
 WantedBy=multi-user.target
