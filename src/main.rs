@@ -67,10 +67,16 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-/// Logs at info level unless `RUST_LOG` says otherwise (e.g. `RUST_LOG=pubky_tls_proxy=debug`).
+/// Default log filter when `RUST_LOG` isn't set. rustls warns about clients that break the
+/// TLS spec (e.g. an IP address as SNI), which operators can't act on.
+const DEFAULT_LOG_FILTER: &str = "info,rustls=error";
+
+/// Logs according to `RUST_LOG` (e.g. `RUST_LOG=pubky_tls_proxy=debug`), or
+/// [`DEFAULT_LOG_FILTER`] if it isn't set.
 /// Colours are only used on a terminal, so they don't end up in e.g. the systemd journal.
 fn init_logging() {
-    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+    let filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(DEFAULT_LOG_FILTER));
     tracing_subscriber::fmt()
         .with_env_filter(filter)
         .with_ansi(std::io::stdout().is_terminal())

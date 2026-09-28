@@ -186,10 +186,21 @@ async fn handle_connection(
         proxy_addr: client.local_addr()?,
     };
 
-    let detected = tokio::time::timeout(TRAFFIC_DETECTION_TIMEOUT, detect_traffic(&mut client))
-        .await
-        .context("Timed out waiting for the client to send data")?
-        .context("Failed to detect traffic kind")?;
+    // Clients that leave or stay silent before we know what they speak are mostly port
+    // scanners. That's not worth a warning.
+    let detected =
+        match tokio::time::timeout(TRAFFIC_DETECTION_TIMEOUT, detect_traffic(&mut client)).await {
+            Ok(Ok(detected)) => detected,
+            Ok(Err(error)) if forwarding::is_hang_up(&error) => {
+                debug!("{client_addr} closed the connection before sending a request");
+                return Ok(());
+            }
+            Ok(Err(error)) => return Err(error).context("Failed to detect traffic kind"),
+            Err(_elapsed) => {
+                debug!("{client_addr} sent nothing within {TRAFFIC_DETECTION_TIMEOUT:?}, closing");
+                return Ok(());
+            }
+        };
 
     // Replay the bytes consumed by detection so the next hop sees the whole connection.
     let client = PrefixedStream::new(detected.initial_bytes, client);

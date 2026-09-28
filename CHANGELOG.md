@@ -6,6 +6,10 @@ All notable changes are documented here. The format is based on
 
 ## [Unreleased]
 
+### Changed
+- Clients that disconnect or stay silent are logged at debug level instead of as warnings.
+  rustls warnings about misbehaving clients are hidden unless `RUST_LOG` enables them.
+
 ## [0.3.0] - 2026-09-28
 
 ### Added

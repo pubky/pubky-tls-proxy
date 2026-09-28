@@ -110,6 +110,29 @@ async fn regular_https_is_passed_through_unchanged_to_https_backend() -> Result<
 }
 
 #[tokio::test]
+async fn client_hanging_up_before_sending_anything_is_not_a_failure() -> Result<()> {
+    let routes = Routes {
+        pubky_tls_acceptor: TlsAcceptor::from(Arc::new(
+            Keypair::random().to_rpk_rustls_server_config(),
+        )),
+        http_backend: Backend {
+            addr: unused_localhost_addr(),
+            send_proxy_protocol: true,
+        },
+        https_backend: None,
+    };
+    let listener = TcpListener::bind(localhost_any_port()).await?;
+    let client = TcpStream::connect(listener.local_addr()?).await?;
+    let (proxy_side, client_addr) = listener.accept().await?;
+
+    drop(client);
+    let result = handle_connection(proxy_side, client_addr, &routes).await;
+
+    assert!(result.is_ok(), "{result:?}");
+    Ok(())
+}
+
+#[tokio::test]
 async fn regular_https_without_https_backend_is_closed() -> Result<()> {
     let http_backend = start_http_echo_backend().await?;
     let proxy = start_proxy(http_backend, None, true).await?;
