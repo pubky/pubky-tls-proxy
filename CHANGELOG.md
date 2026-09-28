@@ -6,6 +6,8 @@ All notable changes are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-09-28
+
 ### Added
 - Cache the pkarr packet on disk (`pkarr-packet.cache`, `--packet-cache-file`), so it can
   still be republished if it disappears from the DHT and the relays.
@@ -47,7 +49,8 @@ All notable changes are documented here. The format is based on
 
 - First release candidate.
 
-[Unreleased]: https://github.com/pubky/pubky-tls-proxy/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/pubky/pubky-tls-proxy/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/pubky/pubky-tls-proxy/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/pubky/pubky-tls-proxy/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/pubky/pubky-tls-proxy/compare/v0.1.0-rc.0...v0.2.0
 [0.1.0-rc.0]: https://github.com/pubky/pubky-tls-proxy/releases/tag/v0.1.0-rc.0
