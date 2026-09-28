@@ -1,94 +1,55 @@
 use anyhow::{Context, Result};
 use clap::Parser;
 use pkarr::Keypair;
-use std::{
-    fs,
-    net::SocketAddr,
-    path::{Path, PathBuf},
-    time::Duration,
-};
+use std::{fs, path::Path, time::Duration};
 use tokio::signal;
 use tracing::{info, Level};
 
+mod cli;
+mod config;
 mod forwarding;
 mod prefixed_stream;
 mod proxy;
 mod proxy_protocol;
+mod republisher;
 #[cfg(test)]
 mod test_support;
 mod traffic_detection;
 
+use config::{RepublishSettings, Settings};
 use proxy::{Proxy, ProxyConfig};
+use republisher::{PkarrNetwork, Republisher};
 
-/// A proxy that terminates Pubky TLS with a pkarr secret key and routes all other HTTP(S)
-/// traffic to a regular web server such as nginx.
-///
-/// Plain HTTP and decrypted Pubky TLS go to the HTTP backend. Regular HTTPS is passed through
-/// to the HTTPS backend without decrypting it.
-#[derive(Parser, Debug)]
-#[command(author, version, about, long_about = None)]
-struct Args {
-    /// Path to the file containing the pkarr secret key in HEX format.
-    #[arg(long, value_name = "FILE")]
-    secret_file: PathBuf,
-
-    /// Address to listen on for incoming connections. Can be repeated (e.g. for ports 80 and 443).
-    #[arg(
-        long = "listen-addr",
-        value_name = "ADDR",
-        default_value = "0.0.0.0:8443"
-    )]
-    listen_addrs: Vec<SocketAddr>,
-
-    /// Backend for plain HTTP and decrypted Pubky TLS traffic.
-    #[arg(
-        long,
-        alias = "backend-addr",
-        value_name = "ADDR",
-        default_value = "127.0.0.1:6286"
-    )]
-    http_backend_addr: SocketAddr,
-
-    /// Backend for regular HTTPS traffic, which is forwarded still encrypted.
-    /// If not set, regular HTTPS connections are closed.
-    #[arg(long, value_name = "ADDR")]
-    https_backend_addr: Option<SocketAddr>,
-
-    /// Don't send a PROXY protocol v1 header to the backends.
-    /// Use this if the backend doesn't understand the PROXY protocol.
-    #[arg(long)]
-    no_proxy_protocol: bool,
-}
+const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt().with_max_level(Level::INFO).init();
 
-    let args = Args::parse();
-    let keypair = read_keypair(&args.secret_file)?;
+    let settings = Settings::load(cli::Args::parse())?;
+    match &settings.config_file {
+        Some(config_file) => info!("Using config file {config_file:?}"),
+        None => info!("No config file found, using command line arguments and defaults"),
+    }
+    let keypair = read_keypair(&settings.secret_file)?;
 
     let proxy = Proxy::start(ProxyConfig {
-        keypair,
-        listen_addrs: args.listen_addrs,
-        http_backend_addr: args.http_backend_addr,
-        https_backend_addr: args.https_backend_addr,
-        send_proxy_protocol: !args.no_proxy_protocol,
+        keypair: keypair.clone(),
+        listen_addrs: settings.listen_addrs.clone(),
+        http_backend_addr: settings.http_backend_addr,
+        https_backend_addr: settings.https_backend_addr,
+        send_proxy_protocol: settings.send_proxy_protocol,
     })
     .await?;
+    log_proxy_settings(&proxy, &settings);
 
-    info!("Using public key: {}", proxy.public_key());
-    for listen_addr in proxy.listen_addrs() {
-        info!("Listening on {listen_addr}");
-    }
-    info!("Plain HTTP and Pubky TLS -> {}", args.http_backend_addr);
-    match args.https_backend_addr {
-        Some(https_backend_addr) => info!("Regular HTTPS -> {https_backend_addr}"),
-        None => info!("Regular HTTPS -> rejected, no --https-backend-addr configured"),
-    }
-    info!(
-        "PROXY protocol header: {}",
-        if args.no_proxy_protocol { "off" } else { "on" }
-    );
+    let republisher = match &settings.republish {
+        Some(republish) => Some(start_republisher(&keypair, republish)?),
+        None => {
+            info!("Republishing the pkarr packet: off");
+            None
+        }
+    };
 
     info!("Press Ctrl+C to stop the proxy");
     signal::ctrl_c()
@@ -96,10 +57,60 @@ async fn main() -> Result<()> {
         .context("Failed to listen for Ctrl+C")?;
     info!("Received shutdown signal, shutting down...");
 
-    proxy.shutdown(Some(Duration::from_secs(5))).await?;
+    if let Some(republisher) = republisher {
+        republisher.shutdown(Some(SHUTDOWN_TIMEOUT)).await?;
+    }
+    proxy.shutdown(Some(SHUTDOWN_TIMEOUT)).await?;
     info!("Shutdown complete.");
 
     Ok(())
+}
+
+fn log_proxy_settings(proxy: &Proxy, settings: &Settings) {
+    info!("Using public key: {}", proxy.public_key());
+    for listen_addr in proxy.listen_addrs() {
+        info!("Listening on {listen_addr}");
+    }
+    info!("Plain HTTP and Pubky TLS -> {}", settings.http_backend_addr);
+    match settings.https_backend_addr {
+        Some(https_backend_addr) => info!("Regular HTTPS -> {https_backend_addr}"),
+        None => info!("Regular HTTPS -> rejected, no HTTPS backend configured"),
+    }
+    let proxy_protocol_state = if settings.send_proxy_protocol {
+        "on"
+    } else {
+        "off"
+    };
+    info!("PROXY protocol header: {proxy_protocol_state}");
+}
+
+fn start_republisher(keypair: &Keypair, republish: &RepublishSettings) -> Result<Republisher> {
+    let mut networks = Vec::new();
+    match &republish.dht_bootstrap_nodes {
+        Some(bootstrap_nodes) => {
+            info!("Republishing to the DHT, bootstrapping via {bootstrap_nodes:?}");
+            networks.push(PkarrNetwork::dht(bootstrap_nodes)?);
+        }
+        None => info!("Republishing to the DHT: off"),
+    }
+    match &republish.relays {
+        Some(relays) => {
+            let relay_list: Vec<&str> = relays.iter().map(|relay| relay.as_str()).collect();
+            info!("Republishing to relays {relay_list:?}");
+            networks.push(PkarrNetwork::relays(relays)?);
+        }
+        None => info!("Republishing to relays: off"),
+    }
+    info!(
+        "Republishing the pkarr packet every {}s",
+        republish.interval.as_secs()
+    );
+
+    Ok(Republisher::start(
+        keypair.public_key(),
+        networks,
+        republish.interval,
+    ))
 }
 
 /// Reads a pkarr keypair from a file containing the 32-byte secret key as hex.
