@@ -1,4 +1,5 @@
-export VERSION=$(cargo get package.version)
+# `cargo pkgid` prints e.g. `path+file:///…/pubky-tls-proxy#0.3.0`; keep what follows `#` or `@`.
+export VERSION=$(cargo pkgid | sed 's/.*[#@]//')
 mkdir -p target
 rm -rf target/github-release
 mkdir target/github-release
