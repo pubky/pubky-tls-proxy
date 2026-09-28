@@ -3,10 +3,8 @@ name: Release
 # Pushing a `v*` tag on `main` builds the binaries for all platforms and publishes a
 # GitHub release. The release notes are the matching section of CHANGELOG.md.
 #
-# - Run manually (`gh workflow run release.yml -f tag=v1.2.3`) for tags that were pushed
-#   before this workflow existed, or to retry a failed release.
-# - Pull requests that touch the build run the build jobs only, so a broken target shows
-#   up before the next release.
+# Run it manually (`gh workflow run release.yml -f tag=v1.2.3`) for tags that were pushed
+# before this workflow existed, or to retry a failed release.
 
 on:
   push:
@@ -16,11 +14,6 @@ on:
       tag:
         description: Existing tag to release, e.g. v0.3.0
         required: true
-  pull_request:
-    paths:
-      - Cargo.toml
-      - Cargo.lock
-      - .github/workflows/release.yml
 
 permissions:
   contents: read
@@ -29,13 +22,12 @@ env:
   CARGO_TERM_COLOR: always
   # Same revision as used for local builds.
   CROSS_GIT_REV: 833e90e5e072df2d0acebd00172358dba5ed4d67
-  # Empty for pull requests.
-  TAG: ${{ inputs.tag || (github.ref_type == 'tag' && github.ref_name) || '' }}
+  # The pushed tag, or the tag given to a manual run.
+  TAG: ${{ inputs.tag || github.ref_name }}
 
 jobs:
   verify:
     name: Verify tag
-    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -93,7 +85,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ env.TAG || github.ref }}
+          ref: ${{ env.TAG }}
 
       - name: Install Rust
         run: |
@@ -133,7 +125,6 @@ jobs:
 
   release:
     name: Publish release
-    if: github.event_name != 'pull_request'
     # Only publish if every platform was built.
     needs: [verify, build]
     runs-on: ubuntu-latest

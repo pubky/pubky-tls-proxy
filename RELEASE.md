@@ -54,8 +54,6 @@ In the commands, replace `0.4.0` with the version you're releasing.
   gh workflow run release.yml -f tag=v0.4.0
   ```
 - The same manual run releases tags that were pushed before the workflow existed.
-- Pull requests that change `Cargo.toml`, `Cargo.lock` or the workflow run the build jobs
-  without publishing anything, so a broken target shows up before the release.
 
 ## Building a binary locally
 
