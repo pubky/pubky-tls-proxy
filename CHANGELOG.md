@@ -6,6 +6,8 @@ All notable changes are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-09-28
+
 ### Security
 - Limit concurrent connections across listeners, bound Pubky TLS handshakes and backend setup,
   and close idle connections to prevent stalled clients from exhausting proxy resources.
@@ -68,7 +70,8 @@ All notable changes are documented here. The format is based on
 
 - First release candidate.
 
-[Unreleased]: https://github.com/pubky/pubky-tls-proxy/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/pubky/pubky-tls-proxy/compare/v0.3.2...HEAD
+[0.3.2]: https://github.com/pubky/pubky-tls-proxy/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/pubky/pubky-tls-proxy/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/pubky/pubky-tls-proxy/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/pubky/pubky-tls-proxy/compare/v0.1.0-rc.0...v0.2.0
