@@ -120,12 +120,55 @@ async fn relay(
             debug!("Relayed {client_to_backend_bytes} bytes to backend and {backend_to_client_bytes} bytes to client");
             Ok(())
         }
-        // Many TLS clients close the TCP connection without sending close_notify.
-        // rustls reports this as UnexpectedEof, but for HTTP it's a normal way to hang up.
-        Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => {
-            debug!("Peer closed the connection without TLS close_notify: {error}");
+        Err(error) if is_hang_up(&error) => {
+            debug!("Peer closed the connection: {error}");
             Ok(())
         }
         Err(error) => Err(error).context("Error while relaying data"),
+    }
+}
+
+/// Whether `error` means the other side hung up, rather than a failure worth reporting.
+///
+/// Clients (and internet scanners) regularly drop connections: resets, broken pipes,
+/// sockets that are already gone. Many TLS clients also close the TCP connection without
+/// sending close_notify, which rustls reports as `UnexpectedEof`.
+pub fn is_hang_up(error: &io::Error) -> bool {
+    matches!(
+        error.kind(),
+        io::ErrorKind::UnexpectedEof
+            | io::ErrorKind::ConnectionReset
+            | io::ErrorKind::ConnectionAborted
+            | io::ErrorKind::BrokenPipe
+            | io::ErrorKind::NotConnected
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn peer_disconnects_are_hang_ups() {
+        for kind in [
+            io::ErrorKind::UnexpectedEof,
+            io::ErrorKind::ConnectionReset,
+            io::ErrorKind::ConnectionAborted,
+            io::ErrorKind::BrokenPipe,
+            io::ErrorKind::NotConnected,
+        ] {
+            assert!(is_hang_up(&io::Error::from(kind)), "{kind:?}");
+        }
+    }
+
+    #[test]
+    fn other_io_errors_are_not_hang_ups() {
+        for kind in [
+            io::ErrorKind::PermissionDenied,
+            io::ErrorKind::TimedOut,
+            io::ErrorKind::Other,
+        ] {
+            assert!(!is_hang_up(&io::Error::from(kind)), "{kind:?}");
+        }
     }
 }
