@@ -1,7 +1,7 @@
 //! End-to-end tests: real TCP connections through a running proxy to test backends.
 
 use super::*;
-use crate::test_support::x509_client_hello;
+use crate::test_support::{raw_public_key_client_hello, x509_client_hello};
 use pkarr::dns::{rdata::SVCB, Name};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -157,7 +157,13 @@ async fn client_hanging_up_before_sending_anything_is_not_a_failure() -> Result<
     let (proxy_side, client_addr) = listener.accept().await?;
 
     drop(client);
-    let result = handle_connection(proxy_side, client_addr, &routes).await;
+    let result = handle_connection(
+        proxy_side,
+        client_addr,
+        &routes,
+        ConnectionLimits::default(),
+    )
+    .await;
 
     assert!(result.is_ok(), "{result:?}");
     Ok(())
@@ -175,6 +181,75 @@ async fn regular_https_without_https_backend_is_closed() -> Result<()> {
 
     assert!(response.is_empty());
 
+    proxy.shutdown(None).await
+}
+
+#[tokio::test]
+async fn stalled_pubky_handshake_releases_its_connection_slot() -> Result<()> {
+    let backend = start_http_echo_backend().await?;
+    let proxy = Proxy::start(ProxyConfig {
+        limits: ConnectionLimits {
+            max_connections: 1,
+            handshake_timeout: Duration::from_millis(100),
+            ..ConnectionLimits::default()
+        },
+        ..proxy_config(backend, None, false)
+    })
+    .await?;
+
+    let mut stalled = TcpStream::connect(proxy.listen_addrs()[0]).await?;
+    stalled.write_all(&raw_public_key_client_hello()).await?;
+    let mut bytes = [0u8; 4096];
+    // rustls may respond with handshake data before waiting for the client's next flight.
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while stalled.read(&mut bytes).await? != 0 {}
+        anyhow::Ok(())
+    })
+    .await??;
+
+    let mut next = TcpStream::connect(proxy.listen_addrs()[0]).await?;
+    let response = send_http_post(&mut next, "slot available").await?;
+    assert!(response.starts_with("HTTP/1.1 200 OK"), "{response}");
+    proxy.shutdown(None).await
+}
+
+#[tokio::test]
+async fn connection_limit_is_shared_across_listeners() -> Result<()> {
+    let backend = start_http_echo_backend().await?;
+    let proxy = Proxy::start(ProxyConfig {
+        listen_addrs: vec![localhost_any_port(), localhost_any_port()],
+        limits: ConnectionLimits {
+            max_connections: 1,
+            ..ConnectionLimits::default()
+        },
+        ..proxy_config(backend, None, false)
+    })
+    .await?;
+
+    let mut held = TcpStream::connect(proxy.listen_addrs()[0]).await?;
+    held.write_all(&raw_public_key_client_hello()).await?;
+    // Receiving the server's handshake flight confirms the first listener owns the slot.
+    let mut handshake = [0u8; 4096];
+    assert!(tokio::time::timeout(Duration::from_secs(2), held.read(&mut handshake)).await?? > 0);
+    let mut rejected = TcpStream::connect(proxy.listen_addrs()[1]).await?;
+    let mut byte = [0];
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(2), rejected.read(&mut byte)).await??,
+        0
+    );
+
+    drop(held);
+    let response = tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            let mut available = TcpStream::connect(proxy.listen_addrs()[1]).await?;
+            if let Ok(response) = send_http_post(&mut available, "available").await {
+                break anyhow::Ok(response);
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await??;
+    assert!(response.starts_with("HTTP/1.1 200 OK"), "{response}");
     proxy.shutdown(None).await
 }
 
@@ -259,6 +334,7 @@ fn proxy_config(
         https_backend_addr,
         plain_http: true,
         send_proxy_protocol,
+        limits: ConnectionLimits::default(),
     }
 }
 

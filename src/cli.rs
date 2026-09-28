@@ -49,6 +49,22 @@ pub struct Args {
     #[arg(long)]
     pub no_proxy_protocol: bool,
 
+    /// Maximum simultaneous connections across all listeners. [default: 1024]
+    #[arg(long)]
+    pub max_connections: Option<usize>,
+
+    /// Maximum seconds for a Pubky TLS handshake. [default: 10]
+    #[arg(long)]
+    pub handshake_timeout_secs: Option<u64>,
+
+    /// Maximum seconds to connect to a backend and send its PROXY header. [default: 10]
+    #[arg(long)]
+    pub backend_timeout_secs: Option<u64>,
+
+    /// Seconds without transfer before closing a connection. [default: 300]
+    #[arg(long)]
+    pub idle_timeout_secs: Option<u64>,
+
     /// Don't republish the pkarr packet.
     #[arg(long)]
     pub no_republish: bool,

@@ -6,6 +6,10 @@ All notable changes are documented here. The format is based on
 
 ## [Unreleased]
 
+### Security
+- Limit concurrent connections across listeners, bound Pubky TLS handshakes and backend setup,
+  and close idle connections to prevent stalled clients from exhausting proxy resources.
+
 ### Added
 - `plain_http = false` / `--no-plain-http` to reject incoming plain HTTP on a Pubky-only port
   without affecting decrypted Pubky TLS; rejected protocol traffic is logged at debug level.
