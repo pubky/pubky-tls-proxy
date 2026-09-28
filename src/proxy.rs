@@ -1,442 +1,223 @@
+//! The proxy: accepts connections on all listen addresses and routes each one by its traffic kind.
+//!
+//! | Incoming traffic | Handling                                     | Backend              |
+//! |------------------|----------------------------------------------|----------------------|
+//! | Plain HTTP       | forwarded as is                              | `http_backend_addr`  |
+//! | Pubky TLS        | TLS terminated with the pkarr keypair        | `http_backend_addr`  |
+//! | Regular HTTPS    | forwarded as is, the backend terminates TLS  | `https_backend_addr` |
+
+use crate::{
+    forwarding::{self, Backend, ConnectionAddrs},
+    prefixed_stream::PrefixedStream,
+    traffic_detection::{detect_traffic, IncomingTraffic},
+};
 use anyhow::{Context, Result};
 use pkarr::{Keypair, PublicKey};
 use std::{net::SocketAddr, sync::Arc, time::Duration};
 use tokio::{
-    io::{self, AsyncWriteExt},
     net::{TcpListener, TcpStream},
-    sync::oneshot,
+    sync::watch,
     task::JoinHandle,
 };
 use tokio_rustls::TlsAcceptor;
-use tracing::{error, info, debug};
+use tracing::{debug, error, info, warn};
 
+/// How long a client may take to send enough bytes to classify its traffic.
+const TRAFFIC_DETECTION_TIMEOUT: Duration = Duration::from_secs(10);
 
-pub struct TlsProxy {
-    keypair: Keypair,
-    listen_addr: SocketAddr,
-    backend_addr: SocketAddr,
-    join_handle: JoinHandle<Result<()>>,
-    shutdown_tx: oneshot::Sender<()>,
+/// Everything needed to start a [`Proxy`].
+pub struct ProxyConfig {
+    /// Keypair whose public key Pubky TLS clients connect to.
+    pub keypair: Keypair,
+    pub listen_addrs: Vec<SocketAddr>,
+    /// Receives plain HTTP and decrypted Pubky TLS traffic.
+    pub http_backend_addr: SocketAddr,
+    /// Receives regular HTTPS traffic. Without it, regular HTTPS connections are closed.
+    pub https_backend_addr: Option<SocketAddr>,
+    /// Whether backend connections start with a PROXY protocol v1 header.
+    pub send_proxy_protocol: bool,
 }
 
-impl TlsProxy {
-    pub fn run(keypair: Keypair, listen_addr: SocketAddr, backend_addr: SocketAddr) -> Self {
-        let (join_handle, shutdown_tx) = Self::start(keypair.clone(), listen_addr.clone(), backend_addr.clone());
-        Self {
-            keypair,
-            listen_addr,
-            backend_addr,
-            join_handle,
-            shutdown_tx,
-        }
-    }
+/// Where each kind of traffic goes. Shared by all connections.
+struct Routes {
+    pubky_tls_acceptor: TlsAcceptor,
+    http_backend: Backend,
+    https_backend: Option<Backend>,
+}
 
-    /// Shutdown the proxy.
-    pub async fn shutdown(self, timeout: Option<Duration>) -> anyhow::Result<()> {
-        if let Err(_) = self.shutdown_tx.send(()) {
-            anyhow::bail!("Failed to send shutdown signal");
-        };
-        let timeout_duration = timeout.unwrap_or(Duration::from_secs(10));
-        match tokio::time::timeout(timeout_duration, self.join_handle).await {
-            Ok(result) => result?,
-            Err(_) => {
-                // Timeout occurred
-                anyhow::bail!("Proxy shutdown timed out after {:?}", timeout_duration)
-            }
-        }
-    }
+/// A running proxy. Listens until [`Proxy::shutdown`] is called.
+pub struct Proxy {
+    public_key: PublicKey,
+    listen_addrs: Vec<SocketAddr>,
+    listener_tasks: Vec<JoinHandle<()>>,
+    shutdown_tx: watch::Sender<bool>,
+}
 
-    /// Forward a stream from client to backend.
-    fn forward_stream(client_stream: TcpStream, client_addr: SocketAddr, acceptor: &TlsAcceptor, backend_addr: SocketAddr) {
-        let acceptor = acceptor.clone();
-        let backend_addr = backend_addr; // Clone for the spawned task
-
-        // Spawn a new task for each connection
-        tokio::spawn(async move {
-            // Perform TLS handshake
-            let tls_stream = match acceptor.accept(client_stream).await {
-                Ok(stream) => stream,
-                Err(e) => {
-                    error!("TLS handshake failed for {}: {}", client_addr, e);
-                    return;
-                }
-            };
-            info!("TLS handshake successful for: {}", client_addr);
-
-            // Connect to backend server
-            let backend_stream = match TcpStream::connect(backend_addr).await {
-                Ok(stream) => stream,
-                Err(e) => {
-                    error!(
-                        "Failed to connect to backend {} for {}: {}",
-                        backend_addr, client_addr, e
-                    );
-                    
-                    // Send HTTP 502 Bad Gateway response to client
-                    let (_, mut tls_writer) = io::split(tls_stream);
-                    let error_msg = format!("Backend connection error: {}", e);
-                    let response = format!(
-                        "HTTP/1.1 502 Bad Gateway\r\n\
-                        Content-Type: text/plain\r\n\
-                        Content-Length: {}\r\n\
-                        Connection: close\r\n\
-                        \r\n\
-                        {}",
-                        error_msg.len(),
-                        error_msg
-                    );
-                    
-                    if let Err(write_err) = tls_writer.write_all(response.as_bytes()).await {
-                        error!("Failed to send error response to client: {}", write_err);
-                    }
-                    
-                    let _ = tls_writer.shutdown().await;
-                    return;
-                }
-            };
-            info!("Connected to backend {} for: {}", backend_addr, client_addr);
-
-            // Split streams for bidirectional copying
-            let (mut tls_reader, mut tls_writer) = io::split(tls_stream);
-            let (mut backend_reader, mut backend_writer) = io::split(backend_stream);
-
-            // Forward data from client to backend
-            let client_to_backend = async {
-                match io::copy(&mut tls_reader, &mut backend_writer).await {
-                    Ok(bytes) => info!(
-                        "Client {} -> Backend {}: Copied {} bytes",
-                        client_addr, backend_addr, bytes
-                    ),
-                    Err(e) => {
-                        let err_str = e.to_string();
-                        if err_str.contains("peer closed connection without sending TLS close_notify") {
-                            debug!(
-                                "Client {} closed connection without sending TLS close_notify (not an error): {}",
-                                client_addr, e
-                            );
-                        } else {
-                            error!(
-                                "Error copying Client -> Backend for {}: {}",
-                                client_addr, e
-                            );
-                        }
-                    }
-                }
-                // Shut down the backend writer to signal EOF
-                
-                let _ = backend_writer.shutdown().await;
-            };
-
-            // Forward data from backend to client
-            let backend_to_client = async {
-                match io::copy(&mut backend_reader, &mut tls_writer).await {
-                    Ok(bytes) => info!(
-                        "Backend {} -> Client {}: Copied {} bytes",
-                        backend_addr, client_addr, bytes
-                    ),
-                    Err(e) => error!(
-                        "Error copying Backend -> Client for {}: {}",
-                        client_addr, e
-                    ),
-                }
-                // Shut down the TLS writer to signal EOF
-                let _ = tls_writer.shutdown().await;
-            };
-
-            // Run both tasks concurrently and wait for both to complete
-            tokio::join!(client_to_backend, backend_to_client);
-            info!("Connection closed for: {}", client_addr);
-        });
-    }
-
-    /// Start the proxy in a background task
-    fn start(keypair: Keypair, listen_addr: SocketAddr, backend_addr: SocketAddr) -> (JoinHandle<Result<()>>, oneshot::Sender<()>) {
-        let (shutdown_tx, mut shutdown_rx) = tokio::sync::oneshot::channel::<()>();
-
-        let handle = tokio::spawn(async move {
-            // Create rustls server config from keypair
-            let tls_config = Arc::new(keypair.to_rpk_rustls_server_config());
-            let tls_acceptor = TlsAcceptor::from(tls_config);
-
-            // Set up the TCP listener
+impl Proxy {
+    /// Binds all listen addresses and starts accepting connections in background tasks.
+    ///
+    /// # Errors
+    ///
+    /// Fails if any listen address can't be bound. In that case nothing keeps running.
+    pub async fn start(config: ProxyConfig) -> Result<Self> {
+        let mut listeners = Vec::with_capacity(config.listen_addrs.len());
+        for listen_addr in &config.listen_addrs {
             let listener = TcpListener::bind(listen_addr)
                 .await
-                .with_context(|| format!("Failed to bind to listen address: {}", listen_addr))?;
+                .with_context(|| format!("Failed to bind to listen address {listen_addr}"))?;
+            listeners.push(listener);
+        }
 
-            // Accept connections in a loop
-            loop {
-                tokio::select! {
-                    // Accept a new connection
-                    accepted = listener.accept() => {
-                        let (client_stream, client_addr) = match accepted {
-                            Ok(conn) => conn,
-                            Err(e) => {
-                                error!("Failed to accept incoming connection: {}", e);
-                                continue; // Continue loop on accept error
-                            }
-                        };
-                        info!("Accepted connection from: {}", client_addr);
-                        Self::forward_stream(client_stream, client_addr, &tls_acceptor, backend_addr);
-                    }
+        // Report the actually bound addresses, which differ from the configured ones for port 0.
+        let listen_addrs = listeners
+            .iter()
+            .map(TcpListener::local_addr)
+            .collect::<std::io::Result<Vec<_>>>()?;
 
-                    // Check for shutdown signal
-                    _ = &mut shutdown_rx => {
-                        info!("Shutdown signal received, stopping listener.");
-                        break; // Exit the loop
-                    }
-                }
-            }
-            Ok(()) // Return Ok when loop finishes gracefully
+        let routes = Arc::new(Routes {
+            pubky_tls_acceptor: TlsAcceptor::from(Arc::new(
+                config.keypair.to_rpk_rustls_server_config(),
+            )),
+            http_backend: Backend {
+                addr: config.http_backend_addr,
+                send_proxy_protocol: config.send_proxy_protocol,
+            },
+            https_backend: config.https_backend_addr.map(|addr| Backend {
+                addr,
+                send_proxy_protocol: config.send_proxy_protocol,
+            }),
         });
 
-        (handle, shutdown_tx)
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        let listener_tasks = listeners
+            .into_iter()
+            .map(|listener| {
+                tokio::spawn(accept_connections(
+                    listener,
+                    routes.clone(),
+                    shutdown_rx.clone(),
+                ))
+            })
+            .collect();
+
+        Ok(Self {
+            public_key: config.keypair.public_key(),
+            listen_addrs,
+            listener_tasks,
+            shutdown_tx,
+        })
     }
 
-    /// Backend address the traffic is forwarded to.
-    pub fn backend_addr(&self) -> SocketAddr {
-        self.backend_addr
+    /// Stops accepting new connections. Connections already in progress are not interrupted.
+    ///
+    /// # Errors
+    ///
+    /// Fails if the listeners don't stop within `timeout` (default 10 seconds).
+    pub async fn shutdown(self, timeout: Option<Duration>) -> Result<()> {
+        // Sending only fails if all listeners are already gone, which is fine.
+        let _ = self.shutdown_tx.send(true);
+
+        let timeout = timeout.unwrap_or(Duration::from_secs(10));
+        let all_listeners_stopped = wait_for_listeners_to_stop(self.listener_tasks);
+        tokio::time::timeout(timeout, all_listeners_stopped)
+            .await
+            .with_context(|| format!("Proxy shutdown timed out after {timeout:?}"))
     }
 
-    /// Address the proxy is listening on.
-    pub fn listen_addr(&self) -> SocketAddr {
-        self.listen_addr
+    /// Addresses the proxy is listening on.
+    pub fn listen_addrs(&self) -> &[SocketAddr] {
+        &self.listen_addrs
     }
 
-    /// Public key of the proxy.
+    /// Public key Pubky TLS clients connect to.
     pub fn public_key(&self) -> PublicKey {
-        self.keypair.public_key()
+        self.public_key.clone()
+    }
+}
+
+async fn wait_for_listeners_to_stop(tasks: Vec<JoinHandle<()>>) {
+    for task in tasks {
+        if let Err(join_error) = task.await {
+            error!("Listener task failed: {join_error}");
+        }
+    }
+}
+
+/// Accepts connections on `listener` and handles each in its own task, until shutdown.
+async fn accept_connections(
+    listener: TcpListener,
+    routes: Arc<Routes>,
+    mut shutdown_rx: watch::Receiver<bool>,
+) {
+    loop {
+        tokio::select! {
+            accepted = listener.accept() => {
+                let (client, client_addr) = match accepted {
+                    Ok(connection) => connection,
+                    Err(error) => {
+                        error!("Failed to accept incoming connection: {error}");
+                        continue;
+                    }
+                };
+                debug!("Accepted connection from {client_addr}");
+
+                let routes = routes.clone();
+                tokio::spawn(async move {
+                    if let Err(error) = handle_connection(client, client_addr, &routes).await {
+                        warn!("Connection from {client_addr} failed: {error:#}");
+                    }
+                });
+            }
+
+            // Also stops when the sender is dropped.
+            _ = shutdown_rx.changed() => break,
+        }
+    }
+}
+
+/// Detects the kind of traffic on `client` and forwards it to the matching backend.
+async fn handle_connection(
+    mut client: TcpStream,
+    client_addr: SocketAddr,
+    routes: &Routes,
+) -> Result<()> {
+    let addrs = ConnectionAddrs {
+        client_addr,
+        proxy_addr: client.local_addr()?,
+    };
+
+    let detected = tokio::time::timeout(TRAFFIC_DETECTION_TIMEOUT, detect_traffic(&mut client))
+        .await
+        .context("Timed out waiting for the client to send data")?
+        .context("Failed to detect traffic kind")?;
+
+    // Replay the bytes consumed by detection so the next hop sees the whole connection.
+    let client = PrefixedStream::new(detected.initial_bytes, client);
+
+    match detected.traffic {
+        IncomingTraffic::PlainHttp => {
+            info!("{client_addr}: plain HTTP -> {}", routes.http_backend.addr);
+            forwarding::forward_plain_http(client, routes.http_backend, addrs).await
+        }
+        IncomingTraffic::PubkyTls => {
+            info!("{client_addr}: Pubky TLS -> {}", routes.http_backend.addr);
+            forwarding::forward_pubky_tls(
+                client,
+                &routes.pubky_tls_acceptor,
+                routes.http_backend,
+                addrs,
+            )
+            .await
+        }
+        IncomingTraffic::RegularTls => {
+            let Some(https_backend) = routes.https_backend else {
+                anyhow::bail!("Regular HTTPS received, but no HTTPS backend is configured. Closing connection.");
+            };
+            info!("{client_addr}: regular HTTPS -> {}", https_backend.addr);
+            forwarding::forward_regular_tls(client, https_backend, addrs).await
+        }
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use pkarr::dns::{rdata::SVCB, Name};
-    use tracing::Level;
-    use tracing_subscriber;
-    use tokio::io::AsyncReadExt;
-
-
-    use super::*;
-
-    async fn run_backend_server(addr: SocketAddr, mut shutdown_rx: tokio::sync::oneshot::Receiver<()>) {
-        let listener = tokio::net::TcpListener::bind(addr)
-            .await
-            .expect("Failed to bind backend server");
-        info!("[Backend] Listening on {}", addr);
-
-        loop {
-            tokio::select! {
-                accepted = listener.accept() => {
-                    match accepted {
-                        Ok((mut stream, client_addr)) => {
-                            info!("[Backend] Accepted connection from {}", client_addr);
-                            tokio::spawn(async move {
-                                // Read the request
-                                let mut buffer = vec![0; 4096];
-                                let n = match stream.read(&mut buffer).await {
-                                    Ok(n) => n,
-                                    Err(e) => {
-                                        error!("[Backend] Error reading request: {}", e);
-                                        return;
-                                    }
-                                };
-                                
-                                if n == 0 {
-                                    // Empty request
-                                    error!("[Backend] Empty request from {}", client_addr);
-                                    return;
-                                }
-                                
-                                // Extract the request body
-                                let req_data = String::from_utf8_lossy(&buffer[0..n]);
-                                
-                                // For HTTP POST request, find the request body after headers
-                                let body = if req_data.contains("POST") {
-                                    if let Some(idx) = req_data.find("\r\n\r\n") {
-                                        let body_start = idx + 4;
-                                        if body_start < req_data.len() {
-                                            &req_data[body_start..]
-                                        } else {
-                                            ""
-                                        }
-                                    } else {
-                                        ""
-                                    }
-                                } else {
-                                    ""
-                                };
-                                
-                                info!("[Backend] Received request: {} bytes", n);
-                                
-                                // Send HTTP response with the same body
-                                let response = format!(
-                                    "HTTP/1.1 200 OK\r\n\
-                                    Content-Type: text/plain\r\n\
-                                    Content-Length: {}\r\n\
-                                    Connection: close\r\n\
-                                    \r\n\
-                                    {}",
-                                    body.len(),
-                                    body
-                                );
-                                
-                                if let Err(e) = stream.write_all(response.as_bytes()).await {
-                                    error!("[Backend] Error writing response: {}", e);
-                                    return;
-                                }
-                                
-                                if let Err(e) = stream.flush().await {
-                                    error!("[Backend] Error flushing: {}", e);
-                                    return;
-                                }
-                                
-                                info!("[Backend] Echoed {} bytes for {}", body.len(), client_addr);
-                            });
-                        }
-                        Err(e) => {
-                            error!("[Backend] Failed to accept connection: {}", e);
-                        }
-                    }
-                }
-                _ = &mut shutdown_rx => {
-                    info!("[Backend] Shutdown signal received.");
-                    break;
-                }
-            }
-        }
-    }
-
-    #[tokio::test]
-    async fn test_proxy_request() -> Result<()> {
-        // Setup simple tracing for test output
-        tracing_subscriber::fmt().with_max_level(Level::INFO).init();
-        
-        let keypair = Keypair::random();
-
-        // Start the backend server
-        let backend_addr: SocketAddr = format!("127.0.0.1:5000").parse()?;
-        let (backend_shutdown_tx, backend_shutdown_rx) = tokio::sync::oneshot::channel::<()>();
-        let backend_handle = tokio::spawn(run_backend_server(backend_addr, backend_shutdown_rx));
-
-
-        // Create and start the proxy
-        let proxy_addr: SocketAddr = format!("127.0.0.1:5001").parse()?;
-
-        let proxy = TlsProxy::run(keypair.clone(), proxy_addr, backend_addr);
-
-        // Publish pkarr record
-        let pkarr_client = pkarr::Client::builder().build()?;
-        let root_name = Name::new(".").unwrap();
-
-        // Add A record
-        let mut builder = pkarr::SignedPacket::builder();
-        builder = builder.a(root_name.clone(), "127.0.0.1".parse().unwrap(), 300);
-
-        // Add SVCB record
-        let mut svcb = SVCB::new(0, root_name.clone());
-        svcb.set_port(proxy_addr.port() as u16);
-        builder = builder.https(root_name.clone(), svcb, 60 * 60);
-
-        let packet = builder.build(&keypair).unwrap();
-        pkarr_client.publish(&packet, None).await?;
-
-        // Configure Reqwest client to trust the proxy's RPK
-        let client = reqwest::ClientBuilder::from(pkarr_client).build()?;
-
-        let url = format!("https://{}:{}", keypair.public_key().to_z32(), proxy_addr.port());
-        let request_body = "Hello from client!";
-
-        info!("Making request to {}", url);
-        // Make request to the proxy
-        let response = client
-            .post(&url)
-            .body(request_body)
-            .send()
-            .await
-            .context("Failed to send request via proxy")?;
-
-        info!("Received response: {:?}", response);
-
-        // Verify response
-        assert!(response.status().is_success());
-        let response_body = response
-            .text()
-            .await
-            .context("Failed to read response body")?;
-        assert_eq!(response_body, request_body);
-        info!("Response verified successfully.");
-
-        // Shutdown servers
-        proxy.shutdown(Some(Duration::from_secs(5))).await?;
-        let _ = backend_shutdown_tx.send(());
-        let _ = backend_handle.await;
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_proxy_with_backend_down() -> Result<()> {
-        // Setup simple tracing for test output
-        tracing_subscriber::fmt().with_max_level(Level::INFO).init();
-        
-        let keypair = Keypair::random();
-
-        // Choose a backend address but don't start the backend server
-        let backend_addr: SocketAddr = format!("127.0.0.1:5002").parse()?;
-        
-        // Create and start the proxy
-        let proxy_addr: SocketAddr = format!("127.0.0.1:5003").parse()?;
-        let proxy = TlsProxy::run(keypair.clone(), proxy_addr, backend_addr);
-
-        // Publish pkarr record
-        let pkarr_client = pkarr::Client::builder().build()?;
-        let root_name = Name::new(".").unwrap();
-
-        // Add A record
-        let mut builder = pkarr::SignedPacket::builder();
-        builder = builder.a(root_name.clone(), "127.0.0.1".parse().unwrap(), 300);
-
-        // Add SVCB record
-        let mut svcb = SVCB::new(0, root_name.clone());
-        svcb.set_port(proxy_addr.port() as u16);
-        builder = builder.https(root_name.clone(), svcb, 60 * 60);
-
-        let packet = builder.build(&keypair).unwrap();
-        pkarr_client.publish(&packet, None).await?;
-
-        // Configure Reqwest client to trust the proxy's RPK
-        let client = reqwest::ClientBuilder::from(pkarr_client).build()?;
-
-        let url = format!("https://{}:{}", keypair.public_key().to_z32(), proxy_addr.port());
-        let request_body = "Hello from client!";
-
-        info!("Making request to {} with backend down at {}", url, backend_addr);
-        
-        // Make request to the proxy - now expecting a 502 HTTP error
-        let response = client
-            .post(&url)
-            .body(request_body)
-            .timeout(Duration::from_secs(5))
-            .send()
-            .await
-            .context("Failed to get response from proxy")?;
-        
-        // Verify we get a 502 Bad Gateway
-        assert_eq!(response.status(), reqwest::StatusCode::BAD_GATEWAY, 
-            "Expected 502 Bad Gateway status code, got: {}", response.status());
-        
-        info!("Received expected 502 Bad Gateway response: {:?}", response);
-        
-        // Read response body to verify error message
-        let response_body = response.text().await?;
-        assert!(response_body.contains("Backend connection error"), 
-            "Expected error message in response body, got: {}", response_body);
-        
-        info!("Response body contains expected error message: {}", response_body);
-
-        // Shutdown proxy
-        proxy.shutdown(Some(Duration::from_secs(5))).await?;
-
-        Ok(())
-    }
-}
+mod tests;

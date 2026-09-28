@@ -4,8 +4,11 @@ Description=pubky-tls-proxy - TLS terminating proxy for raw public key TLS RFC 7
 After=network-online.target
 
 [Service]
-# Update the binary path. Add --verbose to the command if you want to have more insights.
-ExecStart=/usr/local/bin/pubky-tls-proxy --secret-file=path-to-secret --backend-addr=127.0.0.1:6286 --listen-addr=0.0.0.0:8443
+# Update the binary path and secret file.
+# This forwards to a Pubky homeserver directly, which doesn't understand the PROXY protocol.
+# In front of nginx, drop --no-proxy-protocol, add --https-backend-addr and enable `proxy_protocol`
+# on the nginx listeners. See the README for an example.
+ExecStart=/usr/local/bin/pubky-tls-proxy --secret-file=path-to-secret --listen-addr=0.0.0.0:8443 --http-backend-addr=127.0.0.1:6286 --no-proxy-protocol
 Environment="RUST_BACKTRACE=full"
 Restart=on-failure
 RestartSec=5s
