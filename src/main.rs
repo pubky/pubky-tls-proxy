@@ -9,6 +9,7 @@ use tracing_subscriber::EnvFilter;
 mod cli;
 mod config;
 mod forwarding;
+mod packet_cache;
 mod prefixed_stream;
 mod proxy;
 mod proxy_protocol;
@@ -18,6 +19,7 @@ mod test_support;
 mod traffic_detection;
 
 use config::{RepublishSettings, Settings};
+use packet_cache::PacketCache;
 use proxy::{Proxy, ProxyConfig};
 use republisher::{PkarrNetwork, Republisher};
 
@@ -122,10 +124,13 @@ fn start_republisher(keypair: &Keypair, republish: &RepublishSettings) -> Result
         "Republishing the pkarr packet every {}s",
         republish.interval.as_secs()
     );
+    info!("Caching the pkarr packet in {:?}", republish.cache_file);
+    let cache = PacketCache::new(republish.cache_file.clone(), keypair.public_key());
 
     Ok(Republisher::start(
         keypair.public_key(),
         networks,
+        cache,
         republish.interval,
     ))
 }

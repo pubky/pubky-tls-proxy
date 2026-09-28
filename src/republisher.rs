@@ -5,6 +5,7 @@
 //! records, signature and timestamp. It never creates or re-signs a packet, so the packet
 //! must have been published by something else first.
 
+use crate::packet_cache::PacketCache;
 use anyhow::{Context, Result};
 use futures_util::future::join_all;
 use pkarr::{
@@ -65,13 +66,14 @@ impl PkarrNetwork {
 /// What a single republish run achieved.
 #[derive(Debug, PartialEq, Eq)]
 pub enum RepublishOutcome {
-    /// Every network answered that it has no packet for the public key.
+    /// Every network answered that it has no packet for the public key, and none is cached.
     NotFound,
-    /// No network returned a packet, and at least one couldn't be asked.
+    /// No network returned a packet, at least one couldn't be asked, and none is cached.
     ResolveFailed,
     /// The packet with `timestamp` was republished. Networks are listed by name.
     Republished {
         timestamp: Timestamp,
+        source: PacketSource,
         succeeded: Vec<&'static str>,
         /// Networks that rejected the packet because they hold a newer one.
         have_newer_packet: Vec<&'static str>,
@@ -79,11 +81,28 @@ pub enum RepublishOutcome {
     },
 }
 
+/// Where the republished packet came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PacketSource {
+    Networks,
+    /// The networks returned no packet, or an older one than the cached copy.
+    Cache,
+}
+
 /// Result of resolving the packet from all networks.
 enum ResolveResult {
     Found(SignedPacket),
     NotFound,
     Failed,
+}
+
+impl ResolveResult {
+    fn packet(&self) -> Option<SignedPacket> {
+        match self {
+            ResolveResult::Found(packet) => Some(packet.clone()),
+            ResolveResult::NotFound | ResolveResult::Failed => None,
+        }
+    }
 }
 
 /// Result of publishing to one network.
@@ -94,8 +113,10 @@ enum PublishResult {
     Failed(PublishError),
 }
 
-/// Resolves the most recent packet of `public_key` from all `networks` and publishes it
-/// unchanged to each of them.
+/// Publishes the most recent packet of `public_key` unchanged to all `networks`.
+///
+/// The most recent packet is the newest of what the networks return and the copy in
+/// `cache`. A newer packet from the networks replaces the cached copy.
 ///
 /// Resolving is retried after each of `retry_delays` if no network could be asked. A failed
 /// publish is retried on that network, unless the network holds a newer packet. Networks
@@ -104,13 +125,29 @@ enum PublishResult {
 pub async fn republish_once(
     public_key: &PublicKey,
     networks: &[PkarrNetwork],
+    cache: &PacketCache,
     retry_delays: &[Duration],
 ) -> RepublishOutcome {
-    let packet = match resolve_with_retries(public_key, networks, retry_delays).await {
-        ResolveResult::Found(packet) => packet,
-        ResolveResult::NotFound => return RepublishOutcome::NotFound,
-        ResolveResult::Failed => return RepublishOutcome::ResolveFailed,
+    let resolved = resolve_with_retries(public_key, networks, retry_delays).await;
+    let cached_packet = cache.load().await;
+
+    let Some((packet, source)) = most_recent_packet(resolved.packet(), cached_packet.clone())
+    else {
+        // Nothing to republish. It's only "not found" if every network could be asked.
+        return match resolved {
+            ResolveResult::Failed => RepublishOutcome::ResolveFailed,
+            ResolveResult::Found(_) | ResolveResult::NotFound => RepublishOutcome::NotFound,
+        };
     };
+
+    match source {
+        PacketSource::Networks => update_cache(cache, &packet, cached_packet.as_ref()).await,
+        PacketSource::Cache => warn!(
+            "The networks returned no pkarr packet or an older one. \
+             Republishing the cached packet from {:?}.",
+            cache.path()
+        ),
+    }
 
     let publish_results = join_all(
         networks
@@ -145,9 +182,49 @@ pub async fn republish_once(
 
     RepublishOutcome::Republished {
         timestamp: packet.timestamp(),
+        source,
         succeeded,
         have_newer_packet,
         failed,
+    }
+}
+
+/// Picks the newer of the packet from the networks and the cached one. If both are the same
+/// packet, the networks win.
+fn most_recent_packet(
+    network_packet: Option<SignedPacket>,
+    cached_packet: Option<SignedPacket>,
+) -> Option<(SignedPacket, PacketSource)> {
+    match (network_packet, cached_packet) {
+        (Some(network_packet), Some(cached_packet))
+            if cached_packet.more_recent_than(&network_packet) =>
+        {
+            Some((cached_packet, PacketSource::Cache))
+        }
+        (Some(network_packet), _) => Some((network_packet, PacketSource::Networks)),
+        (None, Some(cached_packet)) => Some((cached_packet, PacketSource::Cache)),
+        (None, None) => None,
+    }
+}
+
+/// Stores `packet` in the cache unless the cache already holds it. A cache that can't be
+/// written is logged; republishing continues without it.
+async fn update_cache(
+    cache: &PacketCache,
+    packet: &SignedPacket,
+    cached_packet: Option<&SignedPacket>,
+) {
+    let is_newer_than_cache = cached_packet.is_none_or(|cached| packet.more_recent_than(cached));
+    if !is_newer_than_cache {
+        return;
+    }
+
+    match cache.store(packet).await {
+        Ok(()) => info!("Cached the pkarr packet in {:?}", cache.path()),
+        Err(error) => warn!(
+            "Can't cache the pkarr packet in {:?}: {error}",
+            cache.path()
+        ),
     }
 }
 
@@ -259,11 +336,17 @@ pub struct Republisher {
 }
 
 impl Republisher {
-    pub fn start(public_key: PublicKey, networks: Vec<PkarrNetwork>, interval: Duration) -> Self {
+    pub fn start(
+        public_key: PublicKey,
+        networks: Vec<PkarrNetwork>,
+        cache: PacketCache,
+        interval: Duration,
+    ) -> Self {
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
         let task = tokio::spawn(republish_periodically(
             public_key,
             networks,
+            cache,
             interval,
             shutdown_rx,
         ));
@@ -290,6 +373,7 @@ impl Republisher {
 async fn republish_periodically(
     public_key: PublicKey,
     networks: Vec<PkarrNetwork>,
+    cache: PacketCache,
     interval: Duration,
     mut shutdown_rx: watch::Receiver<bool>,
 ) {
@@ -297,7 +381,7 @@ async fn republish_periodically(
         // Both awaits are raced against shutdown, so a run in progress (e.g. waiting for a
         // retry) is cancelled as well.
         tokio::select! {
-            outcome = republish_once(&public_key, &networks, &RETRY_DELAYS) => {
+            outcome = republish_once(&public_key, &networks, &cache, &RETRY_DELAYS) => {
                 log_outcome(&public_key, &outcome);
             }
             _ = shutdown_rx.changed() => break,
@@ -312,11 +396,12 @@ async fn republish_periodically(
 fn log_outcome(public_key: &PublicKey, outcome: &RepublishOutcome) {
     match outcome {
         RepublishOutcome::NotFound => warn!(
-            "No pkarr packet found for {public_key}, nothing to republish. Publish one first."
+            "No pkarr packet found for {public_key}, neither on the networks nor in the cache. \
+             Nothing to republish. Publish one first."
         ),
         RepublishOutcome::ResolveFailed => error!(
-            "Could not resolve the pkarr packet for {public_key}, nothing republished. \
-             Check the network connection."
+            "Could not resolve the pkarr packet for {public_key} and none is cached. \
+             Nothing republished. Check the network connection."
         ),
         RepublishOutcome::Republished {
             succeeded,
@@ -330,13 +415,18 @@ fn log_outcome(public_key: &PublicKey, outcome: &RepublishOutcome) {
         }
         RepublishOutcome::Republished {
             timestamp,
+            source,
             succeeded,
             ..
         } => {
             let packet_age_secs =
                 Timestamp::now().as_u64().saturating_sub(timestamp.as_u64()) / 1_000_000;
+            let from = match source {
+                PacketSource::Networks => "",
+                PacketSource::Cache => " from the cache",
+            };
             info!(
-                "Republished pkarr packet for {public_key} (signed {packet_age_secs}s ago) to: {}",
+                "Republished pkarr packet for {public_key}{from} (signed {packet_age_secs}s ago) to: {}",
                 succeeded.join(", ")
             );
         }
@@ -348,6 +438,7 @@ mod tests {
     use super::*;
     use mainline::Testnet;
     use pkarr::Keypair;
+    use tempfile::TempDir;
 
     /// A local DHT, so tests don't need internet access.
     struct LocalDht {
@@ -407,19 +498,71 @@ mod tests {
         PkarrNetwork::relays(&[format!("http://127.0.0.1:{port}").parse().unwrap()]).unwrap()
     }
 
+    /// A packet cache in its own temporary directory.
+    struct TestCache {
+        _dir: TempDir,
+        cache: PacketCache,
+    }
+
+    impl TestCache {
+        fn empty(public_key: &PublicKey) -> Self {
+            let dir = TempDir::new().unwrap();
+            let cache = PacketCache::new(dir.path().join("pkarr-packet.cache"), public_key.clone());
+            Self { _dir: dir, cache }
+        }
+
+        async fn holding(packet: &SignedPacket) -> Self {
+            let test_cache = Self::empty(&packet.public_key());
+            test_cache.cache.store(packet).await.unwrap();
+            test_cache
+        }
+
+        async fn packet(&self) -> Option<SignedPacket> {
+            self.cache.load().await
+        }
+    }
+
     #[tokio::test]
-    async fn found_packet_is_republished_unchanged() {
+    async fn packet_from_the_networks_is_republished_unchanged_and_cached() {
         let dht = LocalDht::start().await;
         let keypair = Keypair::random();
         let packet = signed_packet(&keypair);
         dht.publish(&packet).await;
+        let cache = TestCache::empty(&keypair.public_key());
 
-        let outcome = republish_once(&keypair.public_key(), &[dht.network()], &[]).await;
+        let outcome =
+            republish_once(&keypair.public_key(), &[dht.network()], &cache.cache, &[]).await;
 
         assert_eq!(
             outcome,
             RepublishOutcome::Republished {
                 timestamp: packet.timestamp(),
+                source: PacketSource::Networks,
+                succeeded: vec!["DHT"],
+                have_newer_packet: vec![],
+                failed: vec![],
+            }
+        );
+        let resolved = dht.resolve(&keypair.public_key()).await;
+        assert_eq!(resolved.as_bytes(), packet.as_bytes());
+        assert_eq!(cache.packet().await.unwrap().as_bytes(), packet.as_bytes());
+    }
+
+    #[tokio::test]
+    async fn packet_missing_from_the_networks_is_republished_from_the_cache() {
+        let dht = LocalDht::start().await;
+        let keypair = Keypair::random();
+        let packet = signed_packet(&keypair);
+        let cache = TestCache::holding(&packet).await;
+
+        let outcome =
+            republish_once(&keypair.public_key(), &[dht.network()], &cache.cache, &[]).await;
+
+        assert_eq!(
+            outcome,
+            RepublishOutcome::Republished {
+                timestamp: packet.timestamp(),
+                source: PacketSource::Cache,
                 succeeded: vec!["DHT"],
                 have_newer_packet: vec![],
                 failed: vec![],
@@ -430,20 +573,112 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn unknown_public_key_is_not_found() {
+    async fn newer_packet_on_the_networks_replaces_the_cached_one() {
+        let dht = LocalDht::start().await;
+        let keypair = Keypair::random();
+        let older_packet = signed_packet_with_text(&keypair, "older");
+        let newer_packet = signed_packet_with_text(&keypair, "newer");
+        dht.publish(&newer_packet).await;
+        let cache = TestCache::holding(&older_packet).await;
+
+        let outcome =
+            republish_once(&keypair.public_key(), &[dht.network()], &cache.cache, &[]).await;
+
+        assert!(matches!(
+            outcome,
+            RepublishOutcome::Republished { timestamp, source: PacketSource::Networks, .. }
+                if timestamp == newer_packet.timestamp()
+        ));
+        assert_eq!(
+            cache.packet().await.unwrap().as_bytes(),
+            newer_packet.as_bytes()
+        );
+    }
+
+    #[tokio::test]
+    async fn newer_cached_packet_is_republished_over_an_older_one_on_the_networks() {
+        let dht = LocalDht::start().await;
+        let keypair = Keypair::random();
+        let older_packet = signed_packet_with_text(&keypair, "older");
+        let newer_packet = signed_packet_with_text(&keypair, "newer");
+        dht.publish(&older_packet).await;
+        let cache = TestCache::holding(&newer_packet).await;
+
+        let outcome =
+            republish_once(&keypair.public_key(), &[dht.network()], &cache.cache, &[]).await;
+
+        assert!(matches!(
+            outcome,
+            RepublishOutcome::Republished { timestamp, source: PacketSource::Cache, .. }
+                if timestamp == newer_packet.timestamp()
+        ));
+        let resolved = dht.resolve(&keypair.public_key()).await;
+        assert_eq!(resolved.as_bytes(), newer_packet.as_bytes());
+    }
+
+    #[tokio::test]
+    async fn cached_packet_is_used_when_no_network_can_be_asked() {
+        let keypair = Keypair::random();
+        let packet = signed_packet(&keypair);
+        let cache = TestCache::holding(&packet).await;
+
+        let outcome = republish_once(
+            &keypair.public_key(),
+            &[unreachable_relay()],
+            &cache.cache,
+            &[],
+        )
+        .await;
+
+        assert_eq!(
+            outcome,
+            RepublishOutcome::Republished {
+                timestamp: packet.timestamp(),
+                source: PacketSource::Cache,
+                succeeded: vec![],
+                have_newer_packet: vec![],
+                failed: vec!["relays"],
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn unwritable_cache_does_not_stop_republishing() {
+        let dht = LocalDht::start().await;
+        let keypair = Keypair::random();
+        let packet = signed_packet(&keypair);
+        dht.publish(&packet).await;
+        let cache = PacketCache::new(
+            "/does/not/exist/pkarr-packet.cache".into(),
+            keypair.public_key(),
+        );
+
+        let outcome = republish_once(&keypair.public_key(), &[dht.network()], &cache, &[]).await;
+
+        assert!(matches!(
+            outcome,
+            RepublishOutcome::Republished { ref succeeded, .. } if succeeded == &["DHT"]
+        ));
+    }
+
+    #[tokio::test]
+    async fn unknown_public_key_without_cache_is_not_found() {
         let dht = LocalDht::start().await;
         let unknown_public_key = Keypair::random().public_key();
+        let cache = TestCache::empty(&unknown_public_key);
 
-        let outcome = republish_once(&unknown_public_key, &[dht.network()], &[]).await;
+        let outcome =
+            republish_once(&unknown_public_key, &[dht.network()], &cache.cache, &[]).await;
 
         assert_eq!(outcome, RepublishOutcome::NotFound);
     }
 
     #[tokio::test]
-    async fn unreachable_networks_are_a_resolve_failure_not_a_missing_packet() {
+    async fn unreachable_networks_without_cache_are_a_resolve_failure() {
         let public_key = Keypair::random().public_key();
+        let cache = TestCache::empty(&public_key);
 
-        let outcome = republish_once(&public_key, &[unreachable_relay()], &[]).await;
+        let outcome = republish_once(&public_key, &[unreachable_relay()], &cache.cache, &[]).await;
 
         assert_eq!(outcome, RepublishOutcome::ResolveFailed);
     }
@@ -455,10 +690,12 @@ mod tests {
         let packet = signed_packet(&keypair);
         dht.publish(&packet).await;
         let networks = [dht.network(), unreachable_relay()];
+        let cache = TestCache::empty(&keypair.public_key());
 
         let outcome = republish_once(
             &keypair.public_key(),
             &networks,
+            &cache.cache,
             &[Duration::from_millis(10)],
         )
         .await;
@@ -467,6 +704,7 @@ mod tests {
             outcome,
             RepublishOutcome::Republished {
                 timestamp: packet.timestamp(),
+                source: PacketSource::Networks,
                 succeeded: vec!["DHT"],
                 have_newer_packet: vec![],
                 failed: vec!["relays"],

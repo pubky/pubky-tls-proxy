@@ -6,6 +6,10 @@ All notable changes are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+- Cache the pkarr packet on disk (`pkarr-packet.cache`, `--packet-cache-file`), so it can
+  still be republished if it disappears from the DHT and the relays.
+
 ### Changed
 - Clients that disconnect or stay silent are logged at debug level instead of as warnings.
   rustls warnings about misbehaving clients are hidden unless `RUST_LOG` enables them.

@@ -26,6 +26,8 @@ const DEFAULT_LISTEN_ADDR: SocketAddr =
 const DEFAULT_HTTP_BACKEND_ADDR: SocketAddr =
     SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 6286));
 const DEFAULT_REPUBLISH_INTERVAL_SECS: u64 = 60 * 60;
+/// Relative to the config directory, like every relative path.
+const DEFAULT_PACKET_CACHE_FILE: &str = "pkarr-packet.cache";
 
 /// Same list as `mainline::rpc::DEFAULT_BOOTSTRAP_NODES` (mainline 8), which pkarr doesn't re-export.
 const DEFAULT_DHT_BOOTSTRAP_NODES: [&str; 4] = [
@@ -55,6 +57,7 @@ struct FileConfig {
 struct RepublishFileConfig {
     enabled: Option<bool>,
     interval_secs: Option<u64>,
+    cache_file: Option<PathBuf>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -82,6 +85,8 @@ pub struct Settings {
 #[derive(Debug)]
 pub struct RepublishSettings {
     pub interval: Duration,
+    /// Where the last known pkarr packet is kept, see `packet_cache.rs`.
+    pub cache_file: PathBuf,
     /// Resolved DHT bootstrap nodes. `None` disables the DHT.
     pub dht_bootstrap_nodes: Option<Vec<SocketAddrV4>>,
     /// `None` disables relays.
@@ -121,7 +126,7 @@ impl Settings {
 
         let is_republish_enabled = !args.no_republish && file.republish.enabled.unwrap_or(true);
         let republish = if is_republish_enabled {
-            Some(republish_settings(&args, &file)?)
+            Some(republish_settings(&args, &file, &location)?)
         } else {
             None
         };
@@ -191,7 +196,11 @@ fn read_config_file(path: &Path) -> Result<FileConfig> {
     toml::from_str(&content).with_context(|| format!("Invalid config file {path:?}"))
 }
 
-fn republish_settings(args: &Args, file: &FileConfig) -> Result<RepublishSettings> {
+fn republish_settings(
+    args: &Args,
+    file: &FileConfig,
+    location: &ConfigLocation,
+) -> Result<RepublishSettings> {
     let interval_secs = args
         .republish_interval_secs
         .or(file.republish.interval_secs)
@@ -200,6 +209,12 @@ fn republish_settings(args: &Args, file: &FileConfig) -> Result<RepublishSetting
         interval_secs > 0,
         "The republish interval must be at least 1 second"
     );
+
+    let cache_file = args
+        .packet_cache_file
+        .clone()
+        .or(file.republish.cache_file.clone())
+        .unwrap_or_else(|| PathBuf::from(DEFAULT_PACKET_CACHE_FILE));
 
     // A configured list replaces the defaults. An empty list disables the network.
     let bootstrap_nodes = if args.no_pkarr_dht {
@@ -234,6 +249,7 @@ fn republish_settings(args: &Args, file: &FileConfig) -> Result<RepublishSetting
 
     Ok(RepublishSettings {
         interval: Duration::from_secs(interval_secs),
+        cache_file: location.resolve(&cache_file),
         dht_bootstrap_nodes,
         relays,
     })
@@ -351,6 +367,10 @@ mod tests {
         assert!(settings.send_proxy_protocol);
         let republish = settings.republish.unwrap();
         assert_eq!(republish.interval, Duration::from_secs(3600));
+        assert_eq!(
+            republish.cache_file,
+            home.config_dir().join("pkarr-packet.cache")
+        );
         let default_relays: Vec<Url> = pkarr::DEFAULT_RELAYS
             .iter()
             .map(|r| r.parse().unwrap())
@@ -370,6 +390,7 @@ mod tests {
 
             [republish]
             interval_secs = 600
+            cache_file = "state/pkarr-packet.cache"
 
             [pkarr]
             bootstrap_nodes = ["127.0.0.1:6881"]
@@ -403,6 +424,10 @@ mod tests {
         let republish = settings.republish.unwrap();
         assert_eq!(republish.interval, Duration::from_secs(600));
         assert_eq!(
+            republish.cache_file,
+            home.config_dir().join("state/pkarr-packet.cache")
+        );
+        assert_eq!(
             republish.dht_bootstrap_nodes,
             Some(vec!["127.0.0.1:6881".parse().unwrap()])
         );
@@ -430,6 +455,7 @@ mod tests {
             listen_addrs: vec!["127.0.0.1:9000".parse().unwrap()],
             http_backend_addr: Some("127.0.0.1:9001".parse().unwrap()),
             republish_interval_secs: Some(60),
+            packet_cache_file: Some("/var/lib/proxy/pkarr-packet.cache".into()),
             pkarr_bootstrap_nodes: vec!["127.0.0.2:6881".into()],
             pkarr_relays: vec!["https://other-relay.example.com".into()],
             no_proxy_protocol: true,
@@ -450,6 +476,10 @@ mod tests {
         assert!(!settings.send_proxy_protocol);
         let republish = settings.republish.unwrap();
         assert_eq!(republish.interval, Duration::from_secs(60));
+        assert_eq!(
+            republish.cache_file,
+            PathBuf::from("/var/lib/proxy/pkarr-packet.cache")
+        );
         assert_eq!(
             republish.dht_bootstrap_nodes,
             Some(vec!["127.0.0.2:6881".parse().unwrap()])
