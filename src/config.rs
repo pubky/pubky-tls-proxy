@@ -27,7 +27,7 @@ const DEFAULT_HTTP_BACKEND_ADDR: SocketAddr =
     SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 6286));
 const DEFAULT_REPUBLISH_INTERVAL_SECS: u64 = 60 * 60;
 
-/// Same list as `mainline::rpc::DEFAULT_BOOTSTRAP_NODES`, which mainline doesn't export.
+/// Same list as `mainline::rpc::DEFAULT_BOOTSTRAP_NODES` (mainline 8), which pkarr doesn't re-export.
 const DEFAULT_DHT_BOOTSTRAP_NODES: [&str; 4] = [
     "router.bittorrent.com:6881",
     "dht.transmissionbt.com:6881",

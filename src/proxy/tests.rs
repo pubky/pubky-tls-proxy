@@ -238,12 +238,9 @@ async fn pubky_http_client_for(keypair: &Keypair, proxy_port: u16) -> Result<req
         .https(root_name, svcb, 60 * 60)
         .build(keypair)?;
 
-    // Publish through relays only: with both networks, `publish` returns whichever finishes
-    // first, which is often a DHT error while the DHT is still bootstrapping.
-    let relays_client = pkarr::Client::builder().no_dht().build()?;
-    relays_client.publish(&packet, None).await?;
-
     let pkarr_client = pkarr::Client::builder().build()?;
+    pkarr_client.publish(&packet).await?;
+
     Ok(reqwest::ClientBuilder::from(pkarr_client).build()?)
 }
 

@@ -55,7 +55,7 @@ interval_secs = 3600
 [pkarr]
 # A list replaces the defaults. An empty list disables that network.
 bootstrap_nodes = ["router.bittorrent.com:6881", "dht.transmissionbt.com:6881", "dht.libtorrent.org:25401", "relay.pkarr.org:6881"]
-relays = ["https://relay.pkarr.org", "https://pkarr.pubky.org"]
+relays = ["https://pkarr.pubky.app", "https://pkarr.pubky.org"]
 ```
 
 The command line can only switch things off (`--no-...`). If the config file says `proxy_protocol = false`, no flag turns it back on.
@@ -69,6 +69,8 @@ Each run resolves the most recent packet from the DHT and the relays and publish
 Each network is published to separately. A failed publish is retried after 1 and 5 minutes, then logged as an error. The next run starts at the next interval.
 
 DHT bootstrap nodes are resolved once at startup. Nodes without an IPv4 address are skipped with a warning.
+
+If the host blocks mainline DHT traffic (Google Cloud does, for example), set `bootstrap_nodes = []` in the config file or pass `--no-pkarr-dht`. The proxy then republishes through the relays only, and the relays publish the packet to the DHT themselves.
 
 ### PROXY protocol
 
