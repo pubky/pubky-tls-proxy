@@ -42,6 +42,7 @@ async fn main() -> Result<()> {
         http_backend_addr: settings.http_backend_addr,
         https_backend_addr: settings.https_backend_addr,
         send_proxy_protocol: settings.send_proxy_protocol,
+        limits: settings.limits,
     })
     .await?;
     log_proxy_settings(&proxy, &settings);

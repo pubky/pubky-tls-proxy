@@ -1,14 +1,23 @@
 //! Relays a classified client connection to its backend.
 
-use crate::proxy_protocol;
+use crate::{proxy::ConnectionLimits, proxy_protocol};
 use anyhow::{Context, Result};
-use std::net::SocketAddr;
+use std::{
+    io as std_io,
+    net::SocketAddr,
+    pin::Pin,
+    task::{Context as TaskContext, Poll},
+    time::Duration,
+};
 use tokio::{
-    io::{self, AsyncRead, AsyncWrite, AsyncWriteExt},
+    io::{self, AsyncRead, AsyncWrite, AsyncWriteExt, ReadBuf},
     net::TcpStream,
+    sync::watch,
 };
 use tokio_rustls::TlsAcceptor;
 use tracing::debug;
+
+const ERROR_RESPONSE_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// A backend service that connections are forwarded to.
 #[derive(Debug, Clone, Copy)]
@@ -32,16 +41,22 @@ pub async fn forward_plain_http(
     mut client: impl AsyncRead + AsyncWrite + Unpin,
     backend: Backend,
     addrs: ConnectionAddrs,
+    limits: ConnectionLimits,
 ) -> Result<()> {
-    let mut backend_stream = match connect_to_backend(backend, addrs).await {
+    let mut backend_stream = match connect_to_backend(backend, addrs, limits.backend_timeout).await
+    {
         Ok(stream) => stream,
         Err(error) => {
-            send_bad_gateway(&mut client, &error).await;
+            let _ = tokio::time::timeout(
+                ERROR_RESPONSE_TIMEOUT,
+                send_bad_gateway(&mut client, &error),
+            )
+            .await;
             return Err(error);
         }
     };
 
-    relay(&mut client, &mut backend_stream).await
+    relay(&mut client, &mut backend_stream, limits.idle_timeout).await
 }
 
 /// Terminates Pubky TLS with `tls_acceptor` and forwards the decrypted HTTP to `backend`.
@@ -50,14 +65,19 @@ pub async fn forward_pubky_tls(
     tls_acceptor: &TlsAcceptor,
     backend: Backend,
     addrs: ConnectionAddrs,
+    limits: ConnectionLimits,
 ) -> Result<()> {
-    let decrypted_client = tls_acceptor
-        .accept(client)
-        .await
-        .context("Pubky TLS handshake failed")?;
+    let decrypted_client =
+        match tokio::time::timeout(limits.handshake_timeout, tls_acceptor.accept(client)).await {
+            Ok(result) => result.context("Pubky TLS handshake failed")?,
+            Err(_) => {
+                debug!("Pubky TLS handshake timed out for {}", addrs.client_addr);
+                return Ok(());
+            }
+        };
     debug!("Pubky TLS handshake successful for {}", addrs.client_addr);
 
-    forward_plain_http(decrypted_client, backend, addrs).await
+    forward_plain_http(decrypted_client, backend, addrs, limits).await
 }
 
 /// Forwards a regular TLS connection to `backend` without decrypting it.
@@ -68,14 +88,28 @@ pub async fn forward_regular_tls(
     mut client: impl AsyncRead + AsyncWrite + Unpin,
     backend: Backend,
     addrs: ConnectionAddrs,
+    limits: ConnectionLimits,
 ) -> Result<()> {
-    let mut backend_stream = connect_to_backend(backend, addrs).await?;
+    let mut backend_stream = connect_to_backend(backend, addrs, limits.backend_timeout).await?;
 
-    relay(&mut client, &mut backend_stream).await
+    relay(&mut client, &mut backend_stream, limits.idle_timeout).await
 }
 
 /// Connects to `backend` and, if enabled, announces the client with a PROXY protocol header.
-async fn connect_to_backend(backend: Backend, addrs: ConnectionAddrs) -> Result<TcpStream> {
+async fn connect_to_backend(
+    backend: Backend,
+    addrs: ConnectionAddrs,
+    timeout: Duration,
+) -> Result<TcpStream> {
+    tokio::time::timeout(timeout, establish_backend_connection(backend, addrs))
+        .await
+        .with_context(|| format!("Backend setup timed out for {}", backend.addr))?
+}
+
+async fn establish_backend_connection(
+    backend: Backend,
+    addrs: ConnectionAddrs,
+) -> Result<TcpStream> {
     let mut backend_stream = TcpStream::connect(backend.addr)
         .await
         .with_context(|| format!("Failed to connect to backend {}", backend.addr))?;
@@ -110,12 +144,32 @@ async fn send_bad_gateway(client: &mut (impl AsyncWrite + Unpin), error: &anyhow
     let _ = client.shutdown().await;
 }
 
-/// Copies data in both directions until both sides have closed their connection.
+/// Copies in both directions until both sides close or neither transfers data for `idle_timeout`.
 async fn relay(
     client: &mut (impl AsyncRead + AsyncWrite + Unpin),
     backend: &mut (impl AsyncRead + AsyncWrite + Unpin),
+    idle_timeout: Duration,
 ) -> Result<()> {
-    match io::copy_bidirectional(client, backend).await {
+    let (activity_tx, mut activity_rx) = watch::channel(());
+    let mut client = ActivityStream::new(client, activity_tx.clone());
+    let mut backend = ActivityStream::new(backend, activity_tx);
+    let transfer = io::copy_bidirectional(&mut client, &mut backend);
+    tokio::pin!(transfer);
+    let result = loop {
+        tokio::select! {
+            biased;
+            result = &mut transfer => break result,
+            changed = activity_rx.changed() => {
+                // A successful read or write starts another full idle interval.
+                if changed.is_err() { break Err(io::Error::other("activity tracker stopped")); }
+            }
+            _ = tokio::time::sleep(idle_timeout) => {
+                debug!("Connection idle for {idle_timeout:?}, closing");
+                return Ok(());
+            }
+        }
+    };
+    match result {
         Ok((client_to_backend_bytes, backend_to_client_bytes)) => {
             debug!("Relayed {client_to_backend_bytes} bytes to backend and {backend_to_client_bytes} bytes to client");
             Ok(())
@@ -125,6 +179,58 @@ async fn relay(
             Ok(())
         }
         Err(error) => Err(error).context("Error while relaying data"),
+    }
+}
+
+/// Reports data transfer in either direction without changing relay backpressure or half-closes.
+struct ActivityStream<S> {
+    inner: S,
+    activity: watch::Sender<()>,
+}
+
+impl<S> ActivityStream<S> {
+    fn new(inner: S, activity: watch::Sender<()>) -> Self {
+        Self { inner, activity }
+    }
+}
+
+impl<S: AsyncRead + Unpin> AsyncRead for ActivityStream<S> {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut TaskContext<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<std_io::Result<()>> {
+        let before = buf.filled().len();
+        let result = Pin::new(&mut self.inner).poll_read(cx, buf);
+        if matches!(result, Poll::Ready(Ok(()))) && buf.filled().len() > before {
+            self.activity.send_replace(());
+        }
+        result
+    }
+}
+
+impl<S: AsyncWrite + Unpin> AsyncWrite for ActivityStream<S> {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut TaskContext<'_>,
+        buf: &[u8],
+    ) -> Poll<std_io::Result<usize>> {
+        let result = Pin::new(&mut self.inner).poll_write(cx, buf);
+        if matches!(result, Poll::Ready(Ok(bytes)) if bytes > 0) {
+            self.activity.send_replace(());
+        }
+        result
+    }
+
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut TaskContext<'_>) -> Poll<std_io::Result<()>> {
+        Pin::new(&mut self.inner).poll_flush(cx)
+    }
+
+    fn poll_shutdown(
+        mut self: Pin<&mut Self>,
+        cx: &mut TaskContext<'_>,
+    ) -> Poll<std_io::Result<()>> {
+        Pin::new(&mut self.inner).poll_shutdown(cx)
     }
 }
 
@@ -147,6 +253,65 @@ pub fn is_hang_up(error: &io::Error) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    #[tokio::test]
+    async fn inactive_relay_closes_both_sides() {
+        let (mut client, mut proxy_client) = io::duplex(64);
+        let (mut backend, mut proxy_backend) = io::duplex(64);
+        let relay_task = tokio::spawn(async move {
+            relay(
+                &mut proxy_client,
+                &mut proxy_backend,
+                Duration::from_millis(100),
+            )
+            .await
+        });
+
+        let result = tokio::time::timeout(Duration::from_secs(2), relay_task)
+            .await
+            .unwrap()
+            .unwrap();
+        result.unwrap();
+        let mut byte = [0];
+        assert_eq!(client.read(&mut byte).await.unwrap(), 0);
+        assert_eq!(backend.read(&mut byte).await.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn active_relay_survives_idle_interval_and_preserves_half_close() {
+        let (mut client, mut proxy_client) = io::duplex(64);
+        let (mut backend, mut proxy_backend) = io::duplex(64);
+        let relay_task = tokio::spawn(async move {
+            relay(
+                &mut proxy_client,
+                &mut proxy_backend,
+                Duration::from_millis(150),
+            )
+            .await
+        });
+
+        for _ in 0..4 {
+            client.write_all(b"x").await.unwrap();
+            let mut byte = [0];
+            backend.read_exact(&mut byte).await.unwrap();
+            assert_eq!(&byte, b"x");
+            tokio::time::sleep(Duration::from_millis(60)).await;
+        }
+        client.shutdown().await.unwrap();
+        let mut end = [0];
+        assert_eq!(backend.read(&mut end).await.unwrap(), 0);
+        backend.write_all(b"reply").await.unwrap();
+        backend.shutdown().await.unwrap();
+        let mut response = Vec::new();
+        client.read_to_end(&mut response).await.unwrap();
+        assert_eq!(response, b"reply");
+        tokio::time::timeout(Duration::from_secs(2), relay_task)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+    }
 
     #[test]
     fn peer_disconnects_are_hang_ups() {

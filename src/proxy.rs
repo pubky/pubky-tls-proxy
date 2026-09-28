@@ -16,7 +16,7 @@ use pkarr::{Keypair, PublicKey};
 use std::{net::SocketAddr, sync::Arc, time::Duration};
 use tokio::{
     net::{TcpListener, TcpStream},
-    sync::watch,
+    sync::{watch, Semaphore},
     task::JoinHandle,
 };
 use tokio_rustls::TlsAcceptor;
@@ -24,6 +24,27 @@ use tracing::{debug, error, info, warn};
 
 /// How long a client may take to send enough bytes to classify its traffic.
 const TRAFFIC_DETECTION_TIMEOUT: Duration = Duration::from_secs(10);
+const ACCEPT_ERROR_BACKOFF: Duration = Duration::from_millis(100);
+
+/// Resource limits shared by all listeners of a proxy.
+#[derive(Debug, Clone, Copy)]
+pub struct ConnectionLimits {
+    pub max_connections: usize,
+    pub handshake_timeout: Duration,
+    pub backend_timeout: Duration,
+    pub idle_timeout: Duration,
+}
+
+impl Default for ConnectionLimits {
+    fn default() -> Self {
+        Self {
+            max_connections: 1024,
+            handshake_timeout: Duration::from_secs(10),
+            backend_timeout: Duration::from_secs(10),
+            idle_timeout: Duration::from_secs(5 * 60),
+        }
+    }
+}
 
 /// Everything needed to start a [`Proxy`].
 pub struct ProxyConfig {
@@ -36,6 +57,7 @@ pub struct ProxyConfig {
     pub https_backend_addr: Option<SocketAddr>,
     /// Whether backend connections start with a PROXY protocol v1 header.
     pub send_proxy_protocol: bool,
+    pub limits: ConnectionLimits,
 }
 
 /// Where each kind of traffic goes. Shared by all connections.
@@ -60,6 +82,24 @@ impl Proxy {
     ///
     /// Fails if any listen address can't be bound. In that case nothing keeps running.
     pub async fn start(config: ProxyConfig) -> Result<Self> {
+        anyhow::ensure!(
+            config.limits.max_connections > 0
+                && config.limits.max_connections <= Semaphore::MAX_PERMITS,
+            "max_connections must be between 1 and {}",
+            Semaphore::MAX_PERMITS
+        );
+        anyhow::ensure!(
+            !config.limits.handshake_timeout.is_zero(),
+            "handshake_timeout must be positive"
+        );
+        anyhow::ensure!(
+            !config.limits.backend_timeout.is_zero(),
+            "backend_timeout must be positive"
+        );
+        anyhow::ensure!(
+            !config.limits.idle_timeout.is_zero(),
+            "idle_timeout must be positive"
+        );
         let mut listeners = Vec::with_capacity(config.listen_addrs.len());
         for listen_addr in &config.listen_addrs {
             let listener = TcpListener::bind(listen_addr)
@@ -89,12 +129,15 @@ impl Proxy {
         });
 
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        let connection_slots = Arc::new(Semaphore::new(config.limits.max_connections));
         let listener_tasks = listeners
             .into_iter()
             .map(|listener| {
                 tokio::spawn(accept_connections(
                     listener,
                     routes.clone(),
+                    connection_slots.clone(),
+                    config.limits,
                     shutdown_rx.clone(),
                 ))
             })
@@ -147,6 +190,8 @@ async fn wait_for_listeners_to_stop(tasks: Vec<JoinHandle<()>>) {
 async fn accept_connections(
     listener: TcpListener,
     routes: Arc<Routes>,
+    connection_slots: Arc<Semaphore>,
+    limits: ConnectionLimits,
     mut shutdown_rx: watch::Receiver<bool>,
 ) {
     loop {
@@ -156,14 +201,25 @@ async fn accept_connections(
                     Ok(connection) => connection,
                     Err(error) => {
                         error!("Failed to accept incoming connection: {error}");
+                        tokio::select! {
+                            _ = tokio::time::sleep(ACCEPT_ERROR_BACKOFF) => {}
+                            _ = shutdown_rx.changed() => break,
+                        }
                         continue;
                     }
                 };
                 debug!("Accepted connection from {client_addr}");
 
+                // Reject overload before spawning: waiting tasks would themselves consume resources.
+                let Ok(slot) = connection_slots.clone().try_acquire_owned() else {
+                    debug!("Connection limit reached, closing {client_addr}");
+                    continue;
+                };
+
                 let routes = routes.clone();
                 tokio::spawn(async move {
-                    if let Err(error) = handle_connection(client, client_addr, &routes).await {
+                    let _slot = slot;
+                    if let Err(error) = handle_connection(client, client_addr, &routes, limits).await {
                         warn!("Connection from {client_addr} failed: {error:#}");
                     }
                 });
@@ -180,6 +236,7 @@ async fn handle_connection(
     mut client: TcpStream,
     client_addr: SocketAddr,
     routes: &Routes,
+    limits: ConnectionLimits,
 ) -> Result<()> {
     let addrs = ConnectionAddrs {
         client_addr,
@@ -208,7 +265,7 @@ async fn handle_connection(
     match detected.traffic {
         IncomingTraffic::PlainHttp => {
             info!("{client_addr}: plain HTTP -> {}", routes.http_backend.addr);
-            forwarding::forward_plain_http(client, routes.http_backend, addrs).await
+            forwarding::forward_plain_http(client, routes.http_backend, addrs, limits).await
         }
         IncomingTraffic::PubkyTls => {
             info!("{client_addr}: Pubky TLS -> {}", routes.http_backend.addr);
@@ -217,6 +274,7 @@ async fn handle_connection(
                 &routes.pubky_tls_acceptor,
                 routes.http_backend,
                 addrs,
+                limits,
             )
             .await
         }
@@ -225,7 +283,7 @@ async fn handle_connection(
                 anyhow::bail!("Regular HTTPS received, but no HTTPS backend is configured. Closing connection.");
             };
             info!("{client_addr}: regular HTTPS -> {}", https_backend.addr);
-            forwarding::forward_regular_tls(client, https_backend, addrs).await
+            forwarding::forward_regular_tls(client, https_backend, addrs, limits).await
         }
     }
 }

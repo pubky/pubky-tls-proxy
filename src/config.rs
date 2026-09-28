@@ -6,7 +6,7 @@
 //! passed with `--config`, which must exist. Relative paths, from the file and from the
 //! command line, are resolved against the directory of that config file.
 
-use crate::cli::Args;
+use crate::{cli::Args, proxy::ConnectionLimits};
 use anyhow::{bail, ensure, Context, Result};
 use serde::Deserialize;
 use std::{
@@ -15,6 +15,7 @@ use std::{
     path::{Path, PathBuf},
     time::Duration,
 };
+use tokio::sync::Semaphore;
 use tracing::warn;
 use url::Url;
 
@@ -46,6 +47,10 @@ struct FileConfig {
     http_backend_addr: Option<SocketAddr>,
     https_backend_addr: Option<SocketAddr>,
     proxy_protocol: Option<bool>,
+    max_connections: Option<usize>,
+    handshake_timeout_secs: Option<u64>,
+    backend_timeout_secs: Option<u64>,
+    idle_timeout_secs: Option<u64>,
     #[serde(default)]
     republish: RepublishFileConfig,
     #[serde(default)]
@@ -77,6 +82,7 @@ pub struct Settings {
     pub http_backend_addr: SocketAddr,
     pub https_backend_addr: Option<SocketAddr>,
     pub send_proxy_protocol: bool,
+    pub limits: ConnectionLimits,
     /// `None` if republishing is disabled.
     pub republish: Option<RepublishSettings>,
 }
@@ -124,6 +130,8 @@ impl Settings {
             .unwrap_or_else(|| vec![DEFAULT_LISTEN_ADDR]);
         ensure!(!listen_addrs.is_empty(), "listen_addrs must not be empty");
 
+        let limits = connection_limits(&args, &file)?;
+
         let is_republish_enabled = !args.no_republish && file.republish.enabled.unwrap_or(true);
         let republish = if is_republish_enabled {
             Some(republish_settings(&args, &file, &location)?)
@@ -141,9 +149,53 @@ impl Settings {
                 .unwrap_or(DEFAULT_HTTP_BACKEND_ADDR),
             https_backend_addr: args.https_backend_addr.or(file.https_backend_addr),
             send_proxy_protocol: !args.no_proxy_protocol && file.proxy_protocol.unwrap_or(true),
+            limits,
             republish,
         })
     }
+}
+
+/// Merges connection limits and checks them before a listener or semaphore is created.
+fn connection_limits(args: &Args, file: &FileConfig) -> Result<ConnectionLimits> {
+    let defaults = ConnectionLimits::default();
+    let max_connections = args
+        .max_connections
+        .or(file.max_connections)
+        .unwrap_or(defaults.max_connections);
+    let handshake_timeout_secs = args
+        .handshake_timeout_secs
+        .or(file.handshake_timeout_secs)
+        .unwrap_or(defaults.handshake_timeout.as_secs());
+    let backend_timeout_secs = args
+        .backend_timeout_secs
+        .or(file.backend_timeout_secs)
+        .unwrap_or(defaults.backend_timeout.as_secs());
+    let idle_timeout_secs = args
+        .idle_timeout_secs
+        .or(file.idle_timeout_secs)
+        .unwrap_or(defaults.idle_timeout.as_secs());
+
+    ensure!(
+        max_connections > 0 && max_connections <= Semaphore::MAX_PERMITS,
+        "max_connections must be between 1 and {}",
+        Semaphore::MAX_PERMITS
+    );
+    ensure!(
+        handshake_timeout_secs > 0,
+        "handshake_timeout_secs must be positive"
+    );
+    ensure!(
+        backend_timeout_secs > 0,
+        "backend_timeout_secs must be positive"
+    );
+    ensure!(idle_timeout_secs > 0, "idle_timeout_secs must be positive");
+
+    Ok(ConnectionLimits {
+        max_connections,
+        handshake_timeout: Duration::from_secs(handshake_timeout_secs),
+        backend_timeout: Duration::from_secs(backend_timeout_secs),
+        idle_timeout: Duration::from_secs(idle_timeout_secs),
+    })
 }
 
 /// Where the config file is and which directory relative paths are resolved against.
@@ -365,6 +417,10 @@ mod tests {
         assert_eq!(settings.http_backend_addr, DEFAULT_HTTP_BACKEND_ADDR);
         assert_eq!(settings.https_backend_addr, None);
         assert!(settings.send_proxy_protocol);
+        assert_eq!(settings.limits.max_connections, 1024);
+        assert_eq!(settings.limits.handshake_timeout, Duration::from_secs(10));
+        assert_eq!(settings.limits.backend_timeout, Duration::from_secs(10));
+        assert_eq!(settings.limits.idle_timeout, Duration::from_secs(300));
         let republish = settings.republish.unwrap();
         assert_eq!(republish.interval, Duration::from_secs(3600));
         assert_eq!(
@@ -663,6 +719,43 @@ mod tests {
             error.to_string().contains("Invalid pkarr relay URL"),
             "{error}"
         );
+    }
+
+    #[test]
+    fn connection_limits_merge_config_and_command_line() {
+        let home = FakeHome::with_config(
+            r#"
+            secret_file = "secret"
+            max_connections = 50
+            handshake_timeout_secs = 7
+            backend_timeout_secs = 8
+            idle_timeout_secs = 90
+        "#,
+        );
+        let args = Args {
+            max_connections: Some(25),
+            handshake_timeout_secs: Some(3),
+            ..args_with_secret_file()
+        };
+
+        let limits = home.load(args).unwrap().limits;
+        assert_eq!(limits.max_connections, 25);
+        assert_eq!(limits.handshake_timeout, Duration::from_secs(3));
+        assert_eq!(limits.backend_timeout, Duration::from_secs(8));
+        assert_eq!(limits.idle_timeout, Duration::from_secs(90));
+    }
+
+    #[test]
+    fn invalid_connection_limits_are_rejected() {
+        for invalid in [
+            "max_connections = 0",
+            "handshake_timeout_secs = 0",
+            "backend_timeout_secs = 0",
+            "idle_timeout_secs = 0",
+        ] {
+            let home = FakeHome::with_config(&format!("secret_file = \"secret\"\n{invalid}\n"));
+            assert!(home.load(args_with_secret_file()).is_err(), "{invalid}");
+        }
     }
 
     #[test]

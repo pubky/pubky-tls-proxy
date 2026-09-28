@@ -16,6 +16,10 @@ pubky-tls-proxy [--config <FILE>] [--secret-file <FILE>] [--listen-addr <ADDR>].
 - `--http-backend-addr`: Backend for plain HTTP and decrypted Pubky TLS traffic [default: 127.0.0.1:6286]. `--backend-addr` still works as an alias.
 - `--https-backend-addr`: Backend for regular HTTPS traffic. If it isn't set, regular HTTPS connections are closed.
 - `--no-proxy-protocol`: Don't send a [PROXY protocol](https://www.haproxy.org/download/2.9/doc/proxy-protocol.txt) header to the backends. See [PROXY protocol](#proxy-protocol).
+- `--max-connections`: Maximum active client connections across all listen addresses [default: 1024]. When full, new connections are closed immediately.
+- `--handshake-timeout-secs`: Maximum time to complete a Pubky TLS handshake after traffic detection [default: 10].
+- `--backend-timeout-secs`: Maximum time to connect to a backend and send its PROXY header [default: 10].
+- `--idle-timeout-secs`: Close an established connection after this many seconds without data transfer in either direction [default: 300]. Active connections have no maximum lifetime.
 - `--no-republish`: Don't [republish](#republishing-the-pkarr-packet) the pkarr packet.
 - `--republish-interval-secs`: Seconds between two republish runs [default: 3600].
 - `--packet-cache-file`: Where the [packet cache](#packet-cache) is kept [default: `pkarr-packet.cache` in the config directory].
@@ -36,6 +40,10 @@ listen_addrs = ["0.0.0.0:8443"]
 http_backend_addr = "127.0.0.1:6286"
 # https_backend_addr = "127.0.0.1:6443"   # not set: regular HTTPS is rejected
 proxy_protocol = true
+max_connections = 1024
+handshake_timeout_secs = 10
+backend_timeout_secs = 10
+idle_timeout_secs = 300
 
 [republish]
 enabled = true

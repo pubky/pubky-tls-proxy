@@ -6,6 +6,10 @@ All notable changes are documented here. The format is based on
 
 ## [Unreleased]
 
+### Security
+- Limit concurrent connections across listeners, bound Pubky TLS handshakes and backend setup,
+  and close idle connections to prevent stalled clients from exhausting proxy resources.
+
 ### Added
 - Guide: [set up the proxy with nginx and Let's Encrypt](docs/guides/nginx-letsencrypt.md),
   with the proxy on its own port (8443).
