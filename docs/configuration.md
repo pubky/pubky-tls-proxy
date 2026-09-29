@@ -92,6 +92,12 @@ This is **on by default**. The backend must be configured to expect the header (
 
 The proxy logs to stdout at `info` level. Set `RUST_LOG` for more detail, e.g. `RUST_LOG=pubky_tls_proxy=debug`. Clients that disconnect or stay silent are only logged at `debug` level.
 
+## Shutdown
+
+On Ctrl+C, the proxy stops accepting connections and stops packet republishing. Active
+connections have up to five seconds to finish. If any remain, they are cancelled and the
+process exits with a shutdown timeout error.
+
 ## Running directly in front of a Pubky homeserver
 
 Without nginx, the proxy can forward Pubky TLS straight to a homeserver. A homeserver doesn't understand the PROXY protocol, so turn it off:

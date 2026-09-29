@@ -6,6 +6,10 @@ All notable changes are documented here. The format is based on
 
 ## [Unreleased]
 
+### Fixed
+- Drain active connections during shutdown for up to five seconds, then cancel remaining
+  transfers and report a timeout instead of silently truncating them on a successful exit.
+
 ### Changed
 - Reworked the README with a plain-language introduction, clearer setup choices,
   and an overview of traffic forwarding and backend requirements.

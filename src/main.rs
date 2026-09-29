@@ -62,10 +62,17 @@ async fn main() -> Result<()> {
         .context("Failed to listen for Ctrl+C")?;
     info!("Received shutdown signal, shutting down...");
 
-    if let Some(republisher) = republisher {
-        republisher.shutdown(Some(SHUTDOWN_TIMEOUT)).await?;
-    }
-    proxy.shutdown(Some(SHUTDOWN_TIMEOUT)).await?;
+    // Stop both services together; a republisher error must not skip connection draining.
+    let stop_republisher = async {
+        if let Some(republisher) = republisher {
+            republisher.shutdown(Some(SHUTDOWN_TIMEOUT)).await?;
+        }
+        Ok::<_, anyhow::Error>(())
+    };
+    let (proxy_result, republisher_result) =
+        tokio::join!(proxy.shutdown(Some(SHUTDOWN_TIMEOUT)), stop_republisher);
+    proxy_result?;
+    republisher_result?;
     info!("Shutdown complete.");
 
     Ok(())
