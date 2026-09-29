@@ -138,10 +138,7 @@ tar -xzf pubky-tls-proxy-linux-amd64-v0.4.0.tar.gz
 sudo cp pubky-tls-proxy-linux-amd64-v0.4.0/pubky-tls-proxy /usr/local/bin/pubky-tls-proxy
 sudo chmod 755 /usr/local/bin/pubky-tls-proxy
 pubky-tls-proxy --version
-pubky-tls-proxy --help
 ```
-
-Check that the help output includes `--dns-records-file` and `--check`.
 
 ## 5. Configure the proxy
 
