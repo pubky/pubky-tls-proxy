@@ -2,7 +2,6 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use pkarr::Keypair;
 use std::{fs, io::IsTerminal, path::Path, time::Duration};
-use tokio::signal;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
@@ -56,19 +55,46 @@ async fn main() -> Result<()> {
         }
     };
 
-    info!("Press Ctrl+C to stop the proxy");
-    signal::ctrl_c()
-        .await
-        .context("Failed to listen for Ctrl+C")?;
+    wait_for_shutdown_signal().await?;
     info!("Received shutdown signal, shutting down...");
 
-    if let Some(republisher) = republisher {
-        republisher.shutdown(Some(SHUTDOWN_TIMEOUT)).await?;
-    }
-    proxy.shutdown(Some(SHUTDOWN_TIMEOUT)).await?;
+    // Stop both services together; a republisher error must not skip connection draining.
+    let stop_republisher = async {
+        if let Some(republisher) = republisher {
+            republisher.shutdown(Some(SHUTDOWN_TIMEOUT)).await?;
+        }
+        Ok::<_, anyhow::Error>(())
+    };
+    let (proxy_result, republisher_result) =
+        tokio::join!(proxy.shutdown(Some(SHUTDOWN_TIMEOUT)), stop_republisher);
+    proxy_result?;
+    republisher_result?;
     info!("Shutdown complete.");
 
     Ok(())
+}
+
+/// Registers shutdown handlers before announcing readiness to receive a signal.
+#[cfg(unix)]
+async fn wait_for_shutdown_signal() -> Result<()> {
+    use tokio::signal::unix::{signal, SignalKind};
+
+    let mut interrupt = signal(SignalKind::interrupt()).context("Failed to listen for SIGINT")?;
+    let mut terminate = signal(SignalKind::terminate()).context("Failed to listen for SIGTERM")?;
+    info!("Press Ctrl+C to stop the proxy (SIGTERM also supported)");
+    tokio::select! {
+        _ = interrupt.recv() => {}
+        _ = terminate.recv() => {}
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+async fn wait_for_shutdown_signal() -> Result<()> {
+    info!("Press Ctrl+C to stop the proxy");
+    tokio::signal::ctrl_c()
+        .await
+        .context("Failed to listen for Ctrl+C")
 }
 
 /// Default log filter when `RUST_LOG` isn't set. rustls warns about clients that break the

@@ -17,7 +17,7 @@ use std::{net::SocketAddr, sync::Arc, time::Duration};
 use tokio::{
     net::{TcpListener, TcpStream},
     sync::{watch, Semaphore},
-    task::JoinHandle,
+    task::JoinSet,
 };
 use tokio_rustls::TlsAcceptor;
 use tracing::{debug, error, info, warn};
@@ -74,7 +74,7 @@ struct Routes {
 pub struct Proxy {
     public_key: PublicKey,
     listen_addrs: Vec<SocketAddr>,
-    listener_tasks: Vec<JoinHandle<()>>,
+    listener_tasks: JoinSet<()>,
     shutdown_tx: watch::Sender<bool>,
 }
 
@@ -134,18 +134,16 @@ impl Proxy {
 
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
         let connection_slots = Arc::new(Semaphore::new(config.limits.max_connections));
-        let listener_tasks = listeners
-            .into_iter()
-            .map(|listener| {
-                tokio::spawn(accept_connections(
-                    listener,
-                    routes.clone(),
-                    connection_slots.clone(),
-                    config.limits,
-                    shutdown_rx.clone(),
-                ))
-            })
-            .collect();
+        let mut listener_tasks = JoinSet::new();
+        for listener in listeners {
+            listener_tasks.spawn(accept_connections(
+                listener,
+                routes.clone(),
+                connection_slots.clone(),
+                config.limits,
+                shutdown_rx.clone(),
+            ));
+        }
 
         Ok(Self {
             public_key: config.keypair.public_key(),
@@ -155,20 +153,29 @@ impl Proxy {
         })
     }
 
-    /// Stops accepting new connections. Connections already in progress are not interrupted.
+    /// Stops accepting new connections and waits for active connections to finish.
+    /// Connections still running at the deadline are cancelled.
     ///
     /// # Errors
     ///
-    /// Fails if the listeners don't stop within `timeout` (default 10 seconds).
-    pub async fn shutdown(self, timeout: Option<Duration>) -> Result<()> {
+    /// Fails if draining exceeds `timeout` (default 10 seconds), or a listener task fails.
+    pub async fn shutdown(mut self, timeout: Option<Duration>) -> Result<()> {
         // Sending only fails if all listeners are already gone, which is fine.
         let _ = self.shutdown_tx.send(true);
 
         let timeout = timeout.unwrap_or(Duration::from_secs(10));
-        let all_listeners_stopped = wait_for_listeners_to_stop(self.listener_tasks);
-        tokio::time::timeout(timeout, all_listeners_stopped)
-            .await
-            .with_context(|| format!("Proxy shutdown timed out after {timeout:?}"))
+        let result = tokio::time::timeout(
+            timeout,
+            wait_for_listeners_to_stop(&mut self.listener_tasks),
+        )
+        .await
+        .with_context(|| format!("Proxy shutdown timed out after {timeout:?}"))
+        .and_then(|result| result);
+        if result.is_err() {
+            // Cancelling each listener also drops its task set, cancelling its connections.
+            self.listener_tasks.shutdown().await;
+        }
+        result
     }
 
     /// Addresses the proxy is listening on.
@@ -182,12 +189,11 @@ impl Proxy {
     }
 }
 
-async fn wait_for_listeners_to_stop(tasks: Vec<JoinHandle<()>>) {
-    for task in tasks {
-        if let Err(join_error) = task.await {
-            error!("Listener task failed: {join_error}");
-        }
+async fn wait_for_listeners_to_stop(tasks: &mut JoinSet<()>) -> Result<()> {
+    while let Some(result) = tasks.join_next().await {
+        result.context("Listener task failed")?;
     }
+    Ok(())
 }
 
 /// Accepts connections on `listener` and handles each in its own task, until shutdown.
@@ -198,8 +204,19 @@ async fn accept_connections(
     limits: ConnectionLimits,
     mut shutdown_rx: watch::Receiver<bool>,
 ) {
+    let mut connections = JoinSet::new();
     loop {
         tokio::select! {
+            biased;
+            // Check shutdown before accepting another connection, even under continuous load.
+            _ = shutdown_rx.changed() => break,
+
+            result = connections.join_next(), if !connections.is_empty() => {
+                if let Some(Err(error)) = result {
+                    error!("Connection task failed: {error}");
+                }
+            }
+
             accepted = listener.accept() => {
                 let (client, client_addr) = match accepted {
                     Ok(connection) => connection,
@@ -221,16 +238,21 @@ async fn accept_connections(
                 };
 
                 let routes = routes.clone();
-                tokio::spawn(async move {
+                connections.spawn(async move {
                     let _slot = slot;
                     if let Err(error) = handle_connection(client, client_addr, &routes, limits).await {
                         warn!("Connection from {client_addr} failed: {error:#}");
                     }
                 });
             }
+        }
+    }
 
-            // Also stops when the sender is dropped.
-            _ = shutdown_rx.changed() => break,
+    // Close the listening socket before draining, so new clients cannot queue behind it.
+    drop(listener);
+    while let Some(result) = connections.join_next().await {
+        if let Err(error) = result {
+            error!("Connection task failed: {error}");
         }
     }
 }

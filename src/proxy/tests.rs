@@ -10,6 +10,84 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 // ---------------------------------------------------------------------------------------
 
 #[tokio::test]
+async fn shutdown_closes_all_listeners_and_drains_active_responses() -> Result<()> {
+    let backend = TcpListener::bind(localhost_any_port()).await?;
+    let proxy = Proxy::start(ProxyConfig {
+        listen_addrs: vec![localhost_any_port(), localhost_any_port()],
+        ..proxy_config(backend.local_addr()?, None, false)
+    })
+    .await?;
+    let listen_addrs = proxy.listen_addrs().to_vec();
+    let first_part = b"HTTP/1.1 200 OK\r\nContent-Length: 10\r\n\r\n12345";
+    let mut streams = Vec::new();
+    for addr in &listen_addrs {
+        let mut client = TcpStream::connect(addr).await?;
+        client.write_all(b"GET / HTTP/1.0\r\n\r\n").await?;
+        client.shutdown().await?;
+        let (mut upstream, _) = backend.accept().await?;
+        let mut request = Vec::new();
+        upstream.read_to_end(&mut request).await?;
+        upstream.write_all(first_part).await?;
+        let mut received = vec![0; first_part.len()];
+        client.read_exact(&mut received).await?;
+        assert_eq!(received, first_part);
+        streams.push((client, upstream));
+    }
+
+    let shutdown = tokio::spawn(proxy.shutdown(Some(Duration::from_secs(5))));
+    for addr in listen_addrs {
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while TcpStream::connect(addr).await.is_ok() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await?;
+    }
+    assert!(
+        !shutdown.is_finished(),
+        "shutdown must wait for active responses"
+    );
+
+    for (mut client, mut upstream) in streams {
+        upstream.write_all(b"67890").await?;
+        upstream.shutdown().await?;
+        let mut rest = Vec::new();
+        tokio::time::timeout(Duration::from_secs(2), client.read_to_end(&mut rest)).await??;
+        assert_eq!(rest, b"67890");
+    }
+    tokio::time::timeout(Duration::from_secs(2), shutdown).await???;
+    Ok(())
+}
+
+#[tokio::test]
+async fn shutdown_deadline_cancels_stalled_connections() -> Result<()> {
+    let backend = TcpListener::bind(localhost_any_port()).await?;
+    let proxy = start_proxy(backend.local_addr()?, None, false).await?;
+    let listen_addr = proxy.listen_addrs()[0];
+    let mut client = TcpStream::connect(listen_addr).await?;
+    client.write_all(b"GET / HTTP/1.0\r\n\r\n").await?;
+    client.shutdown().await?;
+    let (mut upstream, _) = backend.accept().await?;
+    let mut request = Vec::new();
+    upstream.read_to_end(&mut request).await?;
+    // The backend remains open without answering, well beyond the drain deadline.
+    let result = tokio::time::timeout(
+        Duration::from_secs(2),
+        proxy.shutdown(Some(Duration::from_millis(100))),
+    )
+    .await?;
+    assert!(result
+        .unwrap_err()
+        .to_string()
+        .contains("shutdown timed out"));
+    assert!(TcpStream::connect(listen_addr).await.is_err());
+    let mut response = Vec::new();
+    tokio::time::timeout(Duration::from_secs(2), client.read_to_end(&mut response)).await??;
+    assert!(response.is_empty());
+    Ok(())
+}
+
+#[tokio::test]
 async fn plain_http_is_forwarded_to_http_backend_with_proxy_header() -> Result<()> {
     let http_backend = start_http_echo_backend().await?;
     let proxy = start_proxy(http_backend, None, true).await?;
@@ -29,6 +107,7 @@ async fn plain_http_is_forwarded_to_http_backend_with_proxy_header() -> Result<(
     );
     assert!(response.ends_with("\r\n\r\nhello"), "{response}");
 
+    drop(client);
     proxy.shutdown(None).await
 }
 
@@ -43,6 +122,7 @@ async fn no_proxy_header_is_sent_when_disabled() -> Result<()> {
     assert!(response.contains("x-proxy-header: none\r\n"), "{response}");
     assert!(response.ends_with("\r\n\r\nhello"), "{response}");
 
+    drop(client);
     proxy.shutdown(None).await
 }
 
@@ -140,6 +220,7 @@ async fn regular_https_is_passed_through_unchanged_to_https_backend() -> Result<
         expected_bytes
     );
 
+    drop(client);
     proxy.shutdown(None).await
 }
 
@@ -214,6 +295,7 @@ async fn stalled_pubky_handshake_releases_its_connection_slot() -> Result<()> {
     let mut next = TcpStream::connect(proxy.listen_addrs()[0]).await?;
     let response = send_http_post(&mut next, "slot available").await?;
     assert!(response.starts_with("HTTP/1.1 200 OK"), "{response}");
+    drop(next);
     proxy.shutdown(None).await
 }
 
