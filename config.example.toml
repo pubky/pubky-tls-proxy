@@ -1,0 +1,67 @@
+# Pubky TLS Proxy
+#
+# Start the proxy without editing this file. To change a setting, remove the
+# "# " at the start of its line and edit the value.
+#
+# Command-line options take precedence over this file. Relative file paths
+# are resolved from the directory containing this config.toml.
+# More detail: https://github.com/pubky/pubky-tls-proxy/blob/main/docs/configuration.md
+
+
+# Identity
+# --------
+# The proxy creates this secret key on first start and reuses it thereafter.
+# Back it up: losing it changes the server's Pubky identity.
+# secret_file = "secret"
+
+
+# Where traffic goes
+# ------------------
+# Address and port the proxy accepts connections on.
+# Add another address to the list if you want it to listen on multiple ports.
+# listen_addrs = ["0.0.0.0:8443"]
+
+# Plain HTTP and decrypted Pubky TLS go to this HTTP service.
+# http_backend_addr = "127.0.0.1:6286"
+
+# Regular browser HTTPS stays encrypted and goes to this backend.
+# No HTTPS backend is configured by default, so regular HTTPS is rejected.
+# https_backend_addr = "127.0.0.1:6443"
+
+# Set to false to reject plain HTTP. Pubky TLS still reaches the HTTP backend.
+# plain_http = true
+
+# The proxy sends the client's address to backends using PROXY protocol.
+# Set to false if your backend is not configured to accept that header.
+# proxy_protocol = true
+
+
+# Connection limits
+# -----------------
+# Maximum number of simultaneous client connections.
+# max_connections = 1024
+
+# Time limits in seconds. Each must be greater than zero.
+# handshake_timeout_secs = 10   # Complete a Pubky TLS handshake
+# backend_timeout_secs = 10     # Connect to a backend and send its PROXY header
+# idle_timeout_secs = 300       # No traffic in either direction
+
+
+# Keeping the pkarr packet available
+# ----------------------------------
+# The proxy republishes an existing packet; it does not create the first one.
+# Leave this on unless another service handles republishing.
+[republish]
+# enabled = true
+# interval_secs = 3600          # One hour between runs
+# cache_file = "pkarr-packet.cache"
+
+
+# Where to republish
+# ------------------
+# By default, the proxy uses both the DHT and pkarr relays.
+# Setting either list replaces its defaults. Use [] to disable that network.
+# Do not disable both networks while republishing is enabled.
+[pkarr]
+# bootstrap_nodes = ["router.bittorrent.com:6881"]
+# relays = ["https://pkarr.pubky.app"]
