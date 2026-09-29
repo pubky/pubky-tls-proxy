@@ -17,7 +17,8 @@ You need:
 - A server with a public IPv4 address and a user with `sudo` access. Open **TCP ports 80, 443 and 8443** in the server and cloud firewalls.
 - A domain pointing to that address. This guide uses `example.com`; **replace it with your domain everywhere**, including in file names and configuration examples.
 - Your Pubky secret key in a file containing 32 bytes as hex (64 characters). Copy it to your home directory on the server; for example, from your computer: `scp secret your-user@example.com:~/secret`.
-- Your server's public IPv4 address for the pkarr `A` record. The proxy creates and publishes the packet from the DNS records file below.
+
+The proxy publishes your Pubky address from `dns-records.toml`, which you will create below. Your domain's DNS record is still needed for browsers and Let's Encrypt; the records in this file tell Pubky clients where to connect.
 
 Keep another copy of the secret key somewhere safe. The guide moves the server copy into `/etc`.
 
@@ -120,7 +121,7 @@ Enter your email address, accept the terms, and choose to redirect HTTP to HTTPS
 
 ## 4. Install pubky-tls-proxy
 
-**Version requirement:** `plain_http = false` in step 5 is newer than v0.3.1. Until a release supporting `--no-plain-http` is available, install from the current source. First [install a Rust toolchain](https://rustup.rs/), then run:
+This guide needs local DNS publishing, which is newer than v0.3.3. Install from the current source. First [install a Rust toolchain](https://rustup.rs/), then run:
 
 ```bash
 cargo install --git https://github.com/pubky/pubky-tls-proxy.git --locked --root /tmp/pubky-tls-proxy-install
@@ -129,7 +130,7 @@ sudo chmod 755 /usr/local/bin/pubky-tls-proxy
 pubky-tls-proxy --help
 ```
 
-Check that the help output includes `--no-plain-http`. Once a supporting release is available, you can instead download the appropriate Linux archive from the [releases page](https://github.com/pubky/pubky-tls-proxy/releases/latest) and install its binary in `/usr/local/bin/`.
+Check that the help output includes `--dns-records-file` and `--check`.
 
 ## 5. Configure the proxy
 
@@ -163,11 +164,16 @@ plain_http = false
 
 [republish]
 cache_file = "/var/lib/pubky-tls-proxy/pkarr-packet.cache"
+
+[pkarr]
+records_file = "dns-records.toml"
 ```
 
 For other options, see [Configuration](../configuration.md).
 
-Create the DNS records file next to the config:
+### Tell Pubky clients where to connect
+
+Create the DNS records file next to the config. The `records_file` setting makes this file required:
 
 ```bash
 sudo nano /etc/pubky-tls-proxy/dns-records.toml
@@ -189,7 +195,17 @@ target = "."
 port = 8443
 ```
 
-Check the configuration offline with `sudo pubky-tls-proxy --config /etc/pubky-tls-proxy/config.toml --check`. Subsequent DNS edits are published automatically.
+`@` means your proxy's public key. In the HTTPS record, `target = "."` uses that same host, and `port = 8443` tells clients which public port to use. The proxy signs and publishes these records using your secret key when it starts.
+
+Make both config files readable by the service user, then validate them as that user:
+
+```bash
+sudo chown root:pubky-tls-proxy /etc/pubky-tls-proxy/config.toml /etc/pubky-tls-proxy/dns-records.toml
+sudo chmod 640 /etc/pubky-tls-proxy/config.toml /etc/pubky-tls-proxy/dns-records.toml
+sudo -u pubky-tls-proxy /usr/local/bin/pubky-tls-proxy --config /etc/pubky-tls-proxy/config.toml --check
+```
+
+Look for `Configuration and DNS records are valid`. This check runs offline; starting the service publishes the records.
 
 ## 6. Start the proxy
 
@@ -237,7 +253,7 @@ sudo systemctl enable --now pubky-tls-proxy
 sudo journalctl -u pubky-tls-proxy -n 30 --no-pager
 ```
 
-Look for your public key, `Listening on 0.0.0.0:8443`, `Plain HTTP -> rejected`, and `Republished pkarr packet for …`. Republish may take a few seconds; check the log again if needed. `Regular HTTPS -> rejected, no HTTPS backend configured` is expected: browsers connect directly to nginx, not to this proxy.
+Look for your public key, `Listening on 0.0.0.0:8443`, and `Plain HTTP -> rejected`. For DNS publishing, look for `Managing 2 pkarr DNS records from ...`, followed by `Published local pkarr packet to DHT` or `Published local pkarr packet to relays`. Publishing may take a little while; check the log again if needed. `Regular HTTPS -> rejected, no HTTPS backend configured` is expected: browsers connect directly to nginx, not to this proxy.
 
 ## 7. Verify the setup
 
@@ -274,12 +290,18 @@ location / {
 
 Test with `sudo nginx -t` and reload with `sudo systemctl reload nginx`. Pubky clients arrive with your public key as `Host`. nginx sees `http` for their forwarded requests because the proxy already decrypted Pubky TLS.
 
+## Update your Pubky address
+
+If the server's public IP changes, edit `/etc/pubky-tls-proxy/dns-records.toml` and save it. The proxy checks the file every three seconds and publishes valid changes automatically; no restart is needed. It also republishes the records every hour to keep them available.
+
+If an edit is invalid, the proxy logs the error and keeps the last valid records until you fix the file. Clients may keep using old records until their TTL expires (300 seconds by default). Changes to `config.toml`, such as a new listen port, require a service restart.
+
 ## Troubleshooting
 
 - **Pubky clients can't connect:** Check that TCP port 8443 is open to your users (for a public site, source range `0.0.0.0/0`). From another machine, run `nc -vz -w 5 example.com 8443`. A timeout usually means a firewall is dropping traffic.
 - **Pubky clients go to the wrong port:** Set `port = 8443` in `dns-records.toml`; clients may cache the old value until its TTL expires.
-- **`No pkarr packet found`:** Check that `dns-records.toml` exists beside the config and that publishing is enabled. Without a records file the proxy only republishes existing packets.
-- **DHT errors, but publishing to relays succeeds:** If your network blocks DHT (UDP), add `[pkarr]` and `bootstrap_nodes = []` to the config file. Restart the proxy; the relays publish to the DHT on your behalf.
+- **DNS file errors:** Check that `/etc/pubky-tls-proxy/dns-records.toml` exists, is readable by the service user, and passes the `--check` command in step 5. Keep `records_file = "dns-records.toml"` under `[pkarr]` and publishing enabled under `[republish]`.
+- **DHT errors, but publishing to relays succeeds:** If your network blocks DHT (UDP), add `bootstrap_nodes = []` to the existing `[pkarr]` section in `config.toml`. Restart the proxy; the relays publish to the DHT on your behalf.
 - **`502 Bad Gateway` for Pubky clients:** Check `sudo systemctl status nginx` and `sudo nginx -t`. nginx must listen on `127.0.0.1:8080` with `proxy_protocol` enabled.
 - **certbot fails:** Confirm the domain's A record points to this server and port 80 is open. Test `curl -I http://example.com`.
 

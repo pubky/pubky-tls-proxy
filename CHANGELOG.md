@@ -6,6 +6,10 @@ All notable changes are documented here. The format is based on
 
 ## [Unreleased]
 
+### Changed
+- Use explicitly configured `dns-records.toml` files throughout both nginx setup guides,
+  with compatible installation instructions, validation, and local publishing checks.
+
 ### Added
 - Publish a complete pkarr DNS packet from optional `dns-records.toml`, automatically reload
   edits, and validate records offline with `--check`. Existing external-packet republishing
