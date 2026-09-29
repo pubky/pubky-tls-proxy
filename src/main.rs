@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use clap::Parser;
 use pkarr::Keypair;
-use std::{fs, io::IsTerminal, path::Path, time::Duration};
+use std::{io::IsTerminal, time::Duration};
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
@@ -13,6 +13,7 @@ mod prefixed_stream;
 mod proxy;
 mod proxy_protocol;
 mod republisher;
+mod secret;
 #[cfg(test)]
 mod test_support;
 mod traffic_detection;
@@ -33,7 +34,7 @@ async fn main() -> Result<()> {
         Some(config_file) => info!("Using config file {config_file:?}"),
         None => info!("No config file found, using command line arguments and defaults"),
     }
-    let keypair = read_keypair(&settings.secret_file)?;
+    let keypair = secret::load_or_create_keypair(&settings.secret_file)?;
 
     let proxy = Proxy::start(ProxyConfig {
         keypair: keypair.clone(),
@@ -166,21 +167,4 @@ fn start_republisher(keypair: &Keypair, republish: &RepublishSettings) -> Result
         cache,
         republish.interval,
     ))
-}
-
-/// Reads a pkarr keypair from a file containing the 32-byte secret key as hex.
-fn read_keypair(secret_file: &Path) -> Result<Keypair> {
-    let path = secret_file
-        .canonicalize()
-        .with_context(|| format!("Failed to get absolute path for: {secret_file:?}"))?;
-
-    info!("Loading secret file from {path:?}");
-    let secret_hex = fs::read_to_string(&path)
-        .with_context(|| format!("Failed to read secret file: {path:?}"))?;
-    let secret_bytes = hex::decode(secret_hex.trim()).context("Failed to decode hex secret key")?;
-    let secret_key: [u8; 32] = secret_bytes
-        .try_into()
-        .map_err(|_| anyhow::anyhow!("Secret key must be exactly 32 bytes (64 hex chars)"))?;
-
-    Ok(Keypair::from_secret_key(&secret_key))
 }

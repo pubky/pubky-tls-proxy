@@ -11,7 +11,7 @@ pubky-tls-proxy [--config <FILE>] [--secret-file <FILE>] [--listen-addr <ADDR>].
 ## Arguments
 
 - `--config`: Config file to use instead of `~/.pubky-tls-proxy/config.toml`. Must exist.
-- `--secret-file`: File containing the pubky secret in HEX format (32 bytes/64 hex characters). Required, here or in the config file.
+- `--secret-file`: File containing the pubky secret in HEX format (32 bytes/64 hex characters). Defaults to `secret` in the config directory. Created automatically if missing.
 - `--listen-addr`: Address to listen on. Can be repeated, e.g. for ports 80 and 443 [default: 0.0.0.0:8443].
 - `--http-backend-addr`: Backend for plain HTTP and decrypted Pubky TLS traffic [default: 127.0.0.1:6286]. `--backend-addr` still works as an alias.
 - `--https-backend-addr`: Backend for regular HTTPS traffic. If it isn't set, regular HTTPS connections are closed.
@@ -35,7 +35,7 @@ Relative paths are resolved against the directory of the config file, both in th
 `~/.pubky-tls-proxy/config.toml` is read automatically if it exists. Use `--config <FILE>` to read another file instead. All keys are optional. Unknown keys are an error. This example shows the defaults:
 
 ```toml
-# Required, here or with --secret-file. Relative to this file's directory.
+# Optional. Created if missing. Relative to this file's directory.
 secret_file = "secret"
 listen_addrs = ["0.0.0.0:8443"]
 http_backend_addr = "127.0.0.1:6286"
@@ -112,11 +112,23 @@ pubky-tls-proxy --secret-file secret --listen-addr 0.0.0.0:8443 --http-backend-a
 
 ## Creating a secret key
 
-To generate a new secret key:
+The proxy generates and saves a secret automatically when the file is missing, creating
+parent directories as needed. By default it uses `~/.pubky-tls-proxy/secret`; set
+`--secret-file` or `secret_file` to choose another path. With `--config`, the default
+secret is saved beside that config file. The process needs write access to the directory.
+
+Subsequent starts reuse the same key. Empty, malformed, or unreadable files cause an
+error and are never replaced. New secret files have owner-only permissions (`0600`)
+on Unix. Back up the secret to keep your identity, and keep it private.
+
+To start with an automatically generated key:
 
 ```bash
-# Generate a 32-byte random secret and save as hex
-openssl rand -hex 32 > secret
+pubky-tls-proxy
 ```
 
-The proxy doesn't publish a pkarr packet for a new key. Publish one with an `A` record for the server and an `HTTPS` record for the proxy's listen port before you start it. That's port 8443 in the [recommended nginx guide](guides/nginx-letsencrypt.md), or 443 in the [shared-port guide](guides/nginx-letsencrypt-shared-port.md).
+The startup log shows the public key and the generated secret file's location, never the
+secret itself. The proxy doesn't publish a pkarr packet for a new key. Publish one with
+an `A` record for the server and an `HTTPS` record for the proxy's listen port before
+clients can discover it. That's port 8443 in the [recommended nginx guide](guides/nginx-letsencrypt.md),
+or 443 in the [shared-port guide](guides/nginx-letsencrypt-shared-port.md).

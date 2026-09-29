@@ -106,8 +106,8 @@ impl Settings {
     ///
     /// # Errors
     ///
-    /// Fails if `--config` points to a missing file, the config file is invalid, no secret
-    /// file is configured, or a pkarr network setting is unusable.
+    /// Fails if `--config` points to a missing file, the config file is invalid,
+    /// or a pkarr network setting is unusable.
     pub fn load(args: Args) -> Result<Self> {
         Self::load_with_home_dir(args, std::env::home_dir())
     }
@@ -123,9 +123,7 @@ impl Settings {
             .secret_file
             .clone()
             .or(file.secret_file.clone())
-            .context(
-            "No secret file configured. Use --secret-file or set secret_file in the config file.",
-        )?;
+            .unwrap_or_else(|| PathBuf::from("secret"));
 
         let listen_addrs = non_empty(args.listen_addrs.clone())
             .or(file.listen_addrs.clone())
@@ -630,15 +628,16 @@ mod tests {
     }
 
     #[test]
-    fn missing_secret_file_is_an_error() {
+    fn secret_file_defaults_to_config_directory() {
         let home = FakeHome::without_config();
 
-        let error = home.load(Args::default()).unwrap_err();
-
-        assert!(
-            error.to_string().contains("No secret file configured"),
-            "{error}"
-        );
+        let settings = home
+            .load(Args {
+                no_republish: true,
+                ..Args::default()
+            })
+            .unwrap();
+        assert_eq!(settings.secret_file, home.config_dir().join("secret"));
     }
 
     #[test]

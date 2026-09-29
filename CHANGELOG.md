@@ -6,6 +6,10 @@ All notable changes are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+- Generate and persist a secret key on first startup if missing, defaulting to
+  `~/.pubky-tls-proxy/secret`. Existing keys are reused; new files are owner-only on Unix.
+
 ## [0.3.3] - 2026-09-29
 
 ### Security
