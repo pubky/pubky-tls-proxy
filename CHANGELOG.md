@@ -6,6 +6,9 @@ All notable changes are documented here. The format is based on
 
 ## [Unreleased]
 
+### Fixed
+- Handle SIGTERM as well as Ctrl+C on Unix, so service and container stops run application cleanup.
+
 ### Changed
 - Reworked the README with a plain-language introduction, clearer setup choices,
   and an overview of traffic forwarding and backend requirements.
