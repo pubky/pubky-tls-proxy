@@ -2,8 +2,8 @@
 //!
 //! Precedence: command line > config file > built-in defaults.
 //!
-//! The config file is `~/.pubky-tls-proxy/config.toml`, read only if it exists, or the file
-//! passed with `--config`, which must exist. Relative paths, from the file and from the
+//! The default config file is created from a commented template when missing. A file
+//! passed with `--config` must exist. Relative paths, from the file and from the
 //! command line, are resolved against the directory of that config file.
 
 use crate::{cli::Args, proxy::ConnectionLimits};
@@ -11,16 +11,19 @@ use anyhow::{bail, ensure, Context, Result};
 use serde::Deserialize;
 use std::{
     fs,
+    io::{ErrorKind, Write},
     net::{Ipv4Addr, SocketAddr, SocketAddrV4, ToSocketAddrs},
     path::{Path, PathBuf},
     time::Duration,
 };
+use tempfile::NamedTempFile;
 use tokio::sync::Semaphore;
-use tracing::warn;
+use tracing::{info, warn};
 use url::Url;
 
 const CONFIG_DIR_NAME: &str = ".pubky-tls-proxy";
 const CONFIG_FILE_NAME: &str = "config.toml";
+const CONFIG_TEMPLATE: &str = include_str!("../config.example.toml");
 
 const DEFAULT_LISTEN_ADDR: SocketAddr =
     SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 8443));
@@ -112,8 +115,8 @@ impl Settings {
     ///
     /// # Errors
     ///
-    /// Fails if `--config` points to a missing file, the config file is invalid,
-    /// or a pkarr network setting is unusable.
+    /// Fails if `--config` points to a missing file, the default config cannot be created,
+    /// the config file is invalid, or a pkarr network setting is unusable.
     pub fn load(args: Args) -> Result<Self> {
         Self::load_with_home_dir(args, std::env::home_dir())
     }
@@ -245,8 +248,9 @@ impl ConfigLocation {
         };
         let config_dir = home_dir.join(CONFIG_DIR_NAME);
         let default_config_file = config_dir.join(CONFIG_FILE_NAME);
+        create_default_config_file(&default_config_file)?;
         Ok(Self {
-            file: default_config_file.is_file().then_some(default_config_file),
+            file: Some(default_config_file),
             base_dir: Some(config_dir),
         })
     }
@@ -258,6 +262,36 @@ impl ConfigLocation {
             None => path.to_path_buf(),
         }
     }
+}
+
+/// Publish a complete starter file without replacing an existing config, even across processes.
+fn create_default_config_file(path: &Path) -> Result<()> {
+    match fs::symlink_metadata(path) {
+        Ok(_) => return Ok(()),
+        Err(error) if error.kind() == ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(error).with_context(|| format!("Failed to inspect config file {path:?}"))
+        }
+    }
+
+    let parent = path
+        .parent()
+        .expect("default config file has a parent directory");
+    fs::create_dir_all(parent)
+        .with_context(|| format!("Failed to create config directory {parent:?}"))?;
+    let mut temporary = NamedTempFile::new_in(parent)
+        .with_context(|| format!("Failed to create temporary config in {parent:?}"))?;
+    temporary
+        .write_all(CONFIG_TEMPLATE.as_bytes())
+        .with_context(|| format!("Failed to write config template in {parent:?}"))?;
+    match temporary.persist_noclobber(path) {
+        Ok(_) => info!("Created starter config file at {path:?}"),
+        Err(error) if error.error.kind() == ErrorKind::AlreadyExists => {}
+        Err(error) => {
+            return Err(error).with_context(|| format!("Failed to save config file {path:?}"))
+        }
+    }
+    Ok(())
 }
 
 fn read_config_file(path: &Path) -> Result<FileConfig> {
@@ -448,7 +482,7 @@ mod tests {
     }
 
     #[test]
-    fn defaults_apply_without_config_file() {
+    fn first_start_creates_commented_config_and_uses_defaults() {
         let home = FakeHome::without_config();
         let args = Args {
             no_republish: false,
@@ -458,7 +492,14 @@ mod tests {
 
         let settings = home.load(args).unwrap();
 
-        assert_eq!(settings.config_file, None);
+        let config_file = home.config_dir().join(CONFIG_FILE_NAME);
+        assert_eq!(settings.config_file, Some(config_file.clone()));
+        let template = fs::read_to_string(&config_file).unwrap();
+        assert_eq!(template, CONFIG_TEMPLATE);
+        assert_eq!(
+            toml::from_str::<FileConfig>(&template).unwrap().secret_file,
+            None
+        );
         assert_eq!(settings.listen_addrs, vec![DEFAULT_LISTEN_ADDR]);
         assert_eq!(settings.http_backend_addr, DEFAULT_HTTP_BACKEND_ADDR);
         assert_eq!(settings.https_backend_addr, None);
@@ -479,6 +520,23 @@ mod tests {
             .map(|r| r.parse().unwrap())
             .collect();
         assert_eq!(republish.relays, Some(default_relays));
+    }
+
+    #[test]
+    fn subsequent_starts_preserve_edited_config() {
+        let home = FakeHome::without_config();
+        let config_file = home.config_dir().join(CONFIG_FILE_NAME);
+        home.load(args_with_secret_file()).unwrap();
+        let edited = "listen_addrs = ['127.0.0.1:9000']\n";
+        fs::write(&config_file, edited).unwrap();
+
+        let settings = home.load(args_with_secret_file()).unwrap();
+
+        assert_eq!(fs::read_to_string(&config_file).unwrap(), edited);
+        assert_eq!(
+            settings.listen_addrs,
+            vec!["127.0.0.1:9000".parse().unwrap()]
+        );
     }
 
     #[test]
@@ -599,7 +657,7 @@ mod tests {
     }
 
     #[test]
-    fn relative_cli_paths_resolve_against_config_dir_even_without_config_file() {
+    fn relative_cli_paths_resolve_against_config_dir_on_first_start() {
         let home = FakeHome::without_config();
 
         let settings = home.load(args_with_secret_file()).unwrap();
@@ -652,6 +710,7 @@ mod tests {
         let error = home.load(args).unwrap_err();
 
         assert!(error.to_string().contains("does not exist"), "{error}");
+        assert!(!home.config_dir().exists());
     }
 
     #[test]

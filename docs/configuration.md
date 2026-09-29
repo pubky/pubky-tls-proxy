@@ -30,11 +30,16 @@ pubky-tls-proxy [--config <FILE>] [--secret-file <FILE>] [--listen-addr <ADDR>].
 - `--dns-records-file`: Use this TOML file as the complete pkarr record set. The default `dns-records.toml` beside the config is used if present.
 - `--check`: Validate configuration and DNS records offline, without creating a key, starting listeners, or publishing.
 
-Relative paths are resolved against the directory of the config file, both in the file and on the command line. By default that's `~/.pubky-tls-proxy/`, even if no config file exists there. So `--secret-file secret` means `~/.pubky-tls-proxy/secret`.
+Relative paths are resolved against the directory of the config file, both in the file and on the command line. By default that's `~/.pubky-tls-proxy/`. So `--secret-file secret` means `~/.pubky-tls-proxy/secret`.
 
 ## Config file
 
-`~/.pubky-tls-proxy/config.toml` is read automatically if it exists. Use `--config <FILE>` to read another file instead. All keys are optional. Unknown keys are an error. This example shows the defaults:
+On first run, the proxy creates a commented starter file at
+`~/.pubky-tls-proxy/config.toml`. Edit it to customize the proxy; it is never
+overwritten on later starts. The proxy reads it automatically. Use `--config <FILE>`
+to read another, existing file instead (no file is created at that path). All keys
+are optional. Unknown keys are an error. The generated file is also available as
+[`config.example.toml`](../config.example.toml). This example shows the defaults:
 
 ```toml
 # Optional. Created if missing. Relative to this file's directory.

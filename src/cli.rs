@@ -13,7 +13,7 @@ use std::{net::SocketAddr, path::PathBuf};
 /// to the HTTPS backend without decrypting it. The pkarr packet of the public key is
 /// republished periodically.
 ///
-/// Settings are read from ~/.pubky-tls-proxy/config.toml if it exists. Command line
+/// A commented ~/.pubky-tls-proxy/config.toml is created on first run. Command line
 /// arguments override the config file. Relative paths are resolved against the directory
 /// of the config file, both in the file and on the command line.
 #[derive(Parser, Debug, Default)]

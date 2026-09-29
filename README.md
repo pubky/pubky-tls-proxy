@@ -31,6 +31,8 @@ You will need:
 - A web server or HTTP service for the proxy to forward requests to.
 - A Pubky secret key. The proxy generates one on first startup at
   `~/.pubky-tls-proxy/secret`, or you can supply an existing key with `--secret-file`.
+- The proxy creates a commented `~/.pubky-tls-proxy/config.toml` on first startup.
+  Edit it to customize the defaults; subsequent starts leave it alone.
 - For automatic publishing, a `dns-records.toml` file beside your config with an
   `A` record for your public address and an `HTTPS` record for the proxy's port.
   Alternatively, publish a packet with another tool and let the proxy republish it.
