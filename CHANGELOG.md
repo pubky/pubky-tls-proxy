@@ -7,6 +7,8 @@ All notable changes are documented here. The format is based on
 ## [Unreleased]
 
 ### Changed
+- Describe connections as raw public key TLS or certificate-based TLS in the README,
+  setup guides, and configuration reference, rather than distinguishing browsers from Pubky clients.
 - Validate existing secret keys with `--check`; report missing keys as pending first-start
   generation. Both nginx guides now use automatically generated keys in `~/.pubky-tls-proxy/`
   and minimal systemd services running as the existing login user.

@@ -1,14 +1,13 @@
 # Set up pubky-tls-proxy with nginx and Let's Encrypt
 
-This guide serves one website two ways: browsers use ordinary HTTPS on port 443, and Pubky clients use Pubky TLS on port 8443. nginx handles the browser traffic; the proxy decrypts Pubky TLS and passes those requests to nginx on localhost.
+This guide serves one website two ways: certificate-based HTTPS on port 443 and raw public key TLS on port 8443. nginx handles the certificate-based connection; the proxy decrypts raw public key TLS and passes HTTP requests to nginx on localhost. A browser or another application may support either or both connection types.
 
 ```text
-Browser ────────────────> nginx :80 / :443 ──────────────┐
-                                                         ├─> website
-Pubky client ──> proxy :8443 ──> nginx 127.0.0.1:8080 ──┘
+Plain HTTP / certificate-based HTTPS ──> nginx :80/:443 ──> website
+Raw public key TLS ──> proxy :8443 ──> nginx :8080 ────────> website
 ```
 
-The commands were tested on Debian 13. They also apply to Debian 12 and Ubuntu 24.04. If Pubky clients must use port 443, use the [shared-port guide](nginx-letsencrypt-shared-port.md) instead. On port 8443, the proxy rejects plain HTTP and ordinary HTTPS; nginx handles browser redirects on port 80.
+The commands were tested on Debian 13. They also apply to Debian 12 and Ubuntu 24.04. If raw public key TLS must use port 443, use the [shared-port guide](nginx-letsencrypt-shared-port.md) instead. On port 8443, the proxy rejects plain HTTP and certificate-based HTTPS; nginx handles HTTP redirects on port 80.
 
 ## Before you begin
 
@@ -17,7 +16,7 @@ You need:
 - A server with a public IPv4 address and a user with `sudo` access. Open **TCP ports 80, 443 and 8443** in the server and cloud firewalls.
 - A domain pointing to that address. This guide uses `example.com`; **replace it with your domain everywhere**, including in file names and configuration examples.
 
-The proxy publishes your Pubky address from `dns-records.toml`, which you will create below. Your domain's DNS record is still needed for browsers and Let's Encrypt; the records in this file tell Pubky clients where to connect.
+The proxy publishes your Pubky address through pkarr from `dns-records.toml`, which you will create below. Your domain's DNS record is still needed for domain-based requests and Let's Encrypt. The records in this file let applications discover the server by its public key; pkarr discovery is separate from TLS.
 
 The proxy generates your secret key on first startup and reuses it on later starts.
 
@@ -75,7 +74,7 @@ sudo nginx -t
 sudo systemctl reload nginx
 ```
 
-Create a **second** nginx site for Pubky requests. Keeping it separate means certbot won't alter it:
+Create a **second** nginx site for requests forwarded from raw public key TLS connections. Keeping it separate means certbot won't alter it:
 
 ```bash
 sudo nano /etc/nginx/sites-available/pubky-tls-proxy
@@ -108,7 +107,7 @@ sudo nginx -t
 sudo systemctl reload nginx
 ```
 
-## 3. Enable HTTPS for browsers
+## 3. Set up certificate-based HTTPS
 
 Ask certbot to set up the certificate and HTTPS in the **domain's** nginx site:
 
@@ -171,7 +170,7 @@ records_file = "dns-records.toml"
 
 For other options, see [Configuration](../configuration.md).
 
-### Tell Pubky clients where to connect
+### Publish your Pubky address
 
 Create the DNS records file next to the config. The `records_file` setting makes this file required:
 
@@ -246,7 +245,7 @@ sudo systemctl enable --now pubky-tls-proxy
 sudo journalctl -u pubky-tls-proxy -n 30 --no-pager
 ```
 
-Look for your public key, `Listening on 0.0.0.0:8443`, and `Plain HTTP -> rejected`. For DNS publishing, look for `Managing 2 pkarr DNS records from ...`, followed by `Published local pkarr packet to DHT` or `Published local pkarr packet to relays`. Publishing may take a little while; check the log again if needed. `Regular HTTPS -> rejected, no HTTPS backend configured` is expected: browsers connect directly to nginx, not to this proxy.
+Look for your public key, `Listening on 0.0.0.0:8443`, and `Plain HTTP -> rejected`. For DNS publishing, look for `Managing 2 pkarr DNS records from ...`, followed by `Published local pkarr packet to DHT` or `Published local pkarr packet to relays`. Publishing may take a little while; check the log again if needed. `Regular HTTPS -> rejected, no HTTPS backend configured` is expected: certificate-based HTTPS connects directly to nginx, not to this proxy.
 
 The proxy creates `~/.pubky-tls-proxy/secret` with owner-only permissions on first startup. Back it up securely after the first successful start: losing it changes your Pubky identity. Keep using the same directory across updates.
 
@@ -262,13 +261,13 @@ sudo certbot renew --dry-run
 
 HTTP should redirect to HTTPS; the HTTPS request should print your page without a certificate error; the renewal test should succeed.
 
-To check Pubky TLS, use OpenSSL 3.2 or newer (available on Debian 13). On Debian 12 or Ubuntu 24.04, run this command from another computer with a newer OpenSSL:
+To check raw public key TLS, use OpenSSL 3.2 or newer (available on Debian 13). On Debian 12 or Ubuntu 24.04, run this command from another computer with a newer OpenSSL:
 
 ```bash
 openssl s_client -connect example.com:8443 -enable_server_rpk
 ```
 
-Look for `Server-to-client raw public key negotiated`. This confirms the proxy is listening, but does not verify that the presented public key is yours; use a Pubky-capable client for that. You can find your key in `sudo journalctl -u pubky-tls-proxy -n 30 --no-pager` and inspect its published packet at `https://pkarr.pubky.org/<your-public-key>`.
+Look for `Server-to-client raw public key negotiated`. This confirms the proxy is listening, but does not verify that the presented public key is yours; use a Pubky-capable browser or application for that. You can find your key in `sudo journalctl -u pubky-tls-proxy -n 30 --no-pager` and inspect its published packet at `https://pkarr.pubky.org/<your-public-key>`.
 
 ## Serve an app instead of static files
 
@@ -283,7 +282,7 @@ location / {
 }
 ```
 
-Test with `sudo nginx -t` and reload with `sudo systemctl reload nginx`. Pubky clients arrive with your public key as `Host`. nginx sees `http` for their forwarded requests because the proxy already decrypted Pubky TLS.
+Test with `sudo nginx -t` and reload with `sudo systemctl reload nginx`. Requests addressed to your Pubky identity use your public key as `Host`. nginx sees `http` for these forwarded requests because the proxy already decrypted the raw public key TLS connection.
 
 ## Update your Pubky address
 
@@ -293,11 +292,11 @@ If an edit is invalid, the proxy logs the error and keeps the last valid records
 
 ## Troubleshooting
 
-- **Pubky clients can't connect:** Check that TCP port 8443 is open to your users (for a public site, source range `0.0.0.0/0`). From another machine, run `nc -vz -w 5 example.com 8443`. A timeout usually means a firewall is dropping traffic.
-- **Pubky clients go to the wrong port:** Set `port = 8443` in `dns-records.toml`; clients may cache the old value until its TTL expires.
+- **Raw public key TLS connections fail:** Check that TCP port 8443 is open to your users (for a public site, source range `0.0.0.0/0`). From another machine, run `nc -vz -w 5 example.com 8443`. A timeout usually means a firewall is dropping traffic.
+- **Your Pubky address leads to the wrong port:** Set `port = 8443` in `dns-records.toml`; clients may cache the old value until its TTL expires.
 - **DNS file errors:** Check that `~/.pubky-tls-proxy/dns-records.toml` exists and passes `pubky-tls-proxy --check` as your normal user. Keep `records_file = "dns-records.toml"` under `[pkarr]`. If you have changed publishing settings, make sure publishing is still enabled.
 - **DHT errors, but publishing to relays succeeds:** If your network blocks DHT (UDP), add `bootstrap_nodes = []` to the existing `[pkarr]` section in `config.toml`. Restart the proxy; the relays publish to the DHT on your behalf.
-- **`502 Bad Gateway` for Pubky clients:** Check `sudo systemctl status nginx` and `sudo nginx -t`. nginx must listen on `127.0.0.1:8080` with `proxy_protocol` enabled.
+- **`502 Bad Gateway` over raw public key TLS:** Check `sudo systemctl status nginx` and `sudo nginx -t`. nginx must listen on `127.0.0.1:8080` with `proxy_protocol` enabled.
 - **certbot fails:** Confirm the domain's A record points to this server and port 80 is open. Test `curl -I http://example.com`.
 
 For more logs, set `Environment=RUST_LOG=pubky_tls_proxy=debug` in the systemd service under `[Service]`, then run `sudo systemctl daemon-reload` and `sudo systemctl restart pubky-tls-proxy`.
@@ -306,4 +305,4 @@ For more logs, set `Environment=RUST_LOG=pubky_tls_proxy=debug` in the systemd s
 
 - [Configuration](../configuration.md) covers all settings.
 - To update the proxy, install a newer version as in step 4. Stop the service with `sudo systemctl stop pubky-tls-proxy` before copying over the running binary; then start it with `sudo systemctl start pubky-tls-proxy`.
-- To serve Pubky TLS and ordinary HTTPS on **the same port 443**, follow the [shared-port guide](nginx-letsencrypt-shared-port.md).
+- To serve raw public key TLS and certificate-based HTTPS on **the same port 443**, follow the [shared-port guide](nginx-letsencrypt-shared-port.md).

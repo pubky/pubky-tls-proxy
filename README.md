@@ -3,15 +3,19 @@
 [![GitHub Release](https://img.shields.io/github/v/release/pubky/pubky-tls-proxy)](https://github.com/pubky/pubky-tls-proxy/releases/latest/)
 [![Telegram Chat Group](https://img.shields.io/badge/Chat-Telegram-violet)](https://t.me/pubkycore)
 
-Pubky TLS Proxy lets Pubky clients connect to an existing web server, such as nginx.
-It handles the Pubky TLS connection and forwards the decrypted HTTP traffic to your server.
+Pubky TLS Proxy makes an existing web server, such as nginx, accessible over raw public
+key TLS. It handles the TLS connection and forwards decrypted HTTP traffic to your server.
 
-You can give Pubky clients their own port or share ports 80 and 443 with regular browser
-traffic. On shared ports, your web server continues to handle HTTPS certificates.
+You can give raw public key TLS its own port or share ports 80 and 443 with plain HTTP
+and certificate-based HTTPS. On shared ports, your web server continues to handle certificates.
 
 Pubky uses [raw public key TLS (RFC 7250)](https://datatracker.ietf.org/doc/html/rfc7250):
 clients identify the server by its public key rather than a certificate issued by a
 certificate authority. The proxy handles this part so your web server doesn't need to.
+
+These are connection types, not different kinds of applications: a browser or another
+application may support certificate-based TLS, raw public key TLS, or both. Pubky uses
+pkarr to discover the server's address; that discovery is separate from TLS.
 
 ## Getting started
 
@@ -19,12 +23,12 @@ Download a binary for your platform from the
 [latest release](https://github.com/pubky/pubky-tls-proxy/releases/latest/), then choose
 a setup guide:
 
-- [Use a separate port for Pubky clients](docs/guides/nginx-letsencrypt.md) (recommended).
+- [Use a separate port for raw public key TLS](docs/guides/nginx-letsencrypt.md) (recommended).
   This Ubuntu and Debian guide leaves nginx on ports 80 and 443 and runs the proxy on
   port 8443.
 - [Share ports 80 and 443](docs/guides/nginx-letsencrypt-shared-port.md).
-  Use this setup if Pubky clients need to connect on port 443. The proxy sits in front
-  of nginx and routes both Pubky and browser connections.
+  Use this setup if raw public key TLS must be available on port 443. The proxy sits
+  in front of nginx and routes both types of TLS connection.
 
 You will need:
 
@@ -45,11 +49,11 @@ is the server behind the proxy that handles the request.
 
 | Incoming traffic | What the proxy does | Destination |
 |------------------|---------------------|-------------|
-| Pubky TLS | Handles TLS using your secret key and forwards decrypted HTTP | HTTP backend |
+| Raw public key TLS | Handles TLS using your secret key and forwards decrypted HTTP | HTTP backend |
 | Plain HTTP | Forwards the HTTP traffic | HTTP backend |
-| Regular HTTPS | Passes the encrypted traffic through; the backend handles TLS | HTTPS backend |
+| Certificate-based HTTPS | Passes the encrypted traffic through; the backend handles TLS | HTTPS backend |
 
-You can disable incoming plain HTTP with `--no-plain-http`. Regular HTTPS connections
+You can disable incoming plain HTTP with `--no-plain-http`. Certificate-based HTTPS connections
 are closed unless you configure an HTTPS backend. See the
 [configuration reference](docs/configuration.md) for backend addresses and other settings.
 
@@ -62,8 +66,8 @@ With `dns-records.toml`, the proxy publishes changes automatically and republish
 the packet every hour. Without the file, it keeps the existing behavior: republishing
 the latest network packet (or cached copy) unchanged, without signing new records.
 
-If a backend is unreachable, plain HTTP and Pubky TLS clients receive a
-`502 Bad Gateway`. Regular HTTPS connections are closed because only the backend
+If a backend is unreachable, requests over plain HTTP or raw public key TLS receive a
+`502 Bad Gateway`. Certificate-based HTTPS connections are closed because only the backend
 can complete their TLS handshake.
 
 ## Documentation
