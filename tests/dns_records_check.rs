@@ -3,6 +3,30 @@
 use std::{fs, process::Command};
 
 #[test]
+fn check_rejects_invalid_saved_secrets_and_preserves_valid_ones() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("config.toml");
+    let secret = dir.path().join("secret");
+    fs::write(&config, "[republish]\nenabled=false\n").unwrap();
+    for (contents, valid) in [("bad key".to_string(), false), ("01".repeat(32), true)] {
+        fs::write(&secret, &contents).unwrap();
+        let result = Command::new(env!("CARGO_BIN_EXE_pubky-tls-proxy"))
+            .arg("--config")
+            .arg(&config)
+            .arg("--check")
+            .output()
+            .unwrap();
+        assert_eq!(
+            result.status.success(),
+            valid,
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        assert_eq!(fs::read_to_string(&secret).unwrap(), contents);
+    }
+}
+
+#[test]
 fn check_validates_records_without_creating_a_secret_or_cache() {
     let dir = tempfile::tempdir().unwrap();
     let config = dir.path().join("config.toml");

@@ -48,6 +48,18 @@ pub fn load_or_create_keypair(path: &Path) -> Result<Keypair> {
     }
 }
 
+/// Validates an existing identity without creating one. Only an absent path is allowed
+/// for first-time setup; unreadable files and dangling symlinks remain errors.
+pub fn check_keypair(path: &Path) -> Result<Option<Keypair>> {
+    match fs::symlink_metadata(path) {
+        Ok(_) => read_keypair(path).map(Some),
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(None),
+        Err(error) => {
+            Err(error).with_context(|| format!("Failed to inspect secret file: {path:?}"))
+        }
+    }
+}
+
 fn read_keypair(path: &Path) -> Result<Keypair> {
     info!("Loading secret file from {path:?}");
     let secret_hex = fs::read_to_string(path)

@@ -14,7 +14,7 @@ The proxy decrypts Pubky TLS but passes browser HTTPS through untouched, so ngin
 
 You need a server with `sudo` access, TCP ports **80 and 443** open to the public, and a domain whose A record points to your server. This guide calls that domain `example.com`: **replace it with yours in every file name, command, and configuration example**.
 
-You also need your Pubky secret key (32 bytes as hex) and the server's public IPv4 address. The proxy publishes the pkarr packet from the DNS records file below. Copy your secret file to your home directory on the server, for example `scp secret your-user@example.com:~/secret`. Keep an offline backup.
+Have the server's public IPv4 address ready. The proxy generates your secret key on first startup and reuses it on later starts.
 
 Your domain's DNS record is for browsers and Let's Encrypt. The `dns-records.toml` file you create below tells Pubky clients where to connect; the proxy signs and publishes it using your secret key.
 
@@ -81,7 +81,7 @@ sudo systemctl reload nginx
 
 ## 3. Install pubky-tls-proxy
 
-Download the prebuilt binary from the [releases page](https://github.com/pubky/pubky-tls-proxy/releases). This guide targets **v0.4.0**, which includes local DNS publishing. If that release is not available yet, wait for it before following these steps.
+Download the prebuilt binary from the [releases page](https://github.com/pubky/pubky-tls-proxy/releases). This guide targets **v0.4.0**, which includes local DNS publishing.
 
 The commands below use **linux-amd64**. For a 64-bit ARM server, choose the matching archive on the releases page and replace the platform in the commands.
 
@@ -107,19 +107,15 @@ Check that the help output includes `--dns-records-file` and `--check`.
 
 ## 4. Configure the proxy
 
-Create a user for the proxy and protect the secret file:
+Create a service user and a directory for the configuration files:
 
 ```bash
 sudo useradd --system --no-create-home --shell /usr/sbin/nologin pubky-tls-proxy
 sudo mkdir -p /etc/pubky-tls-proxy
 sudo chown root:pubky-tls-proxy /etc/pubky-tls-proxy
-sudo cp ~/secret /etc/pubky-tls-proxy/secret
-sudo chown root:pubky-tls-proxy /etc/pubky-tls-proxy/secret
-sudo chmod 640 /etc/pubky-tls-proxy/secret
 sudo chmod 750 /etc/pubky-tls-proxy
 ```
 
-After confirming the copy is in place, run `rm ~/secret` to remove the extra server copy (keep your offline backup).
 
 Open the config file:
 
@@ -130,7 +126,7 @@ sudo nano /etc/pubky-tls-proxy/config.toml
 Paste this and save it. The proxy owns ports 80 and 443. nginx receives decrypted Pubky TLS on port 8080 and regular, still-encrypted HTTPS on port 8443 (after step 6).
 
 ```toml
-secret_file = "secret"
+secret_file = "/var/lib/pubky-tls-proxy/secret"
 listen_addrs = ["0.0.0.0:80", "0.0.0.0:443"]
 http_backend_addr = "127.0.0.1:8080"
 https_backend_addr = "127.0.0.1:8443"
@@ -177,7 +173,7 @@ sudo chmod 640 /etc/pubky-tls-proxy/config.toml /etc/pubky-tls-proxy/dns-records
 sudo -u pubky-tls-proxy /usr/local/bin/pubky-tls-proxy --config /etc/pubky-tls-proxy/config.toml --check
 ```
 
-Look for `Configuration and DNS records are valid`. This check runs offline; starting the service publishes the records.
+Look for `Configuration and DNS records are valid`. On first setup, the check also reports that the secret is missing and will be generated at startup. On later checks, it validates the saved secret too. The check runs offline and creates no secret; starting the service generates the identity and publishes the records.
 
 ## 5. Start the proxy
 
@@ -210,6 +206,7 @@ ProtectSystem=strict
 ProtectHome=true
 PrivateTmp=true
 StateDirectory=pubky-tls-proxy
+StateDirectoryMode=0700
 
 [Install]
 WantedBy=multi-user.target
@@ -224,6 +221,8 @@ sudo journalctl -u pubky-tls-proxy -n 30 --no-pager
 ```
 
 Look for your public key, `Listening on 0.0.0.0:80`, and `Listening on 0.0.0.0:443`. For DNS publishing, look for `Managing 2 pkarr DNS records from ...`, followed by `Published local pkarr packet to DHT` or `Published local pkarr packet to relays`. Publishing may take a little while; check the log again if needed.
+
+systemd creates `/var/lib/pubky-tls-proxy` for the secret and packet cache. The generated secret is stored at `/var/lib/pubky-tls-proxy/secret`, readable only by the service user and root. Back it up securely after the first successful start: losing it changes your Pubky identity. Keep using the same file across updates.
 
 ## 6. Get the certificate and enable browser HTTPS
 

@@ -7,6 +7,8 @@ All notable changes are documented here. The format is based on
 ## [Unreleased]
 
 ### Changed
+- Validate existing secret keys with `--check`; report missing keys as pending first-start
+  generation. Both nginx guides now use automatically generated keys in the service state directory.
 - Use explicitly configured `dns-records.toml` files throughout both nginx setup guides,
   with compatible installation instructions, validation, and local publishing checks.
 

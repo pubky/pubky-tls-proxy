@@ -28,7 +28,7 @@ pubky-tls-proxy [--config <FILE>] [--secret-file <FILE>] [--listen-addr <ADDR>].
 - `--pkarr-relay`: Pkarr relay URL. Can be repeated. Replaces the default relays.
 - `--no-pkarr-dht` / `--no-pkarr-relays`: Don't republish to the DHT / to relays.
 - `--dns-records-file`: Use this TOML file as the complete pkarr record set. The default `dns-records.toml` beside the config is used if present.
-- `--check`: Validate configuration and DNS records offline, without creating a key, starting listeners, or publishing.
+- `--check`: Validate configuration, DNS records, and an existing secret offline, without creating a key, starting listeners, or publishing. A missing secret is reported as pending generation at startup; malformed or unreadable secrets are errors.
 
 Relative paths are resolved against the directory of the config file, both in the file and on the command line. By default that's `~/.pubky-tls-proxy/`. So `--secret-file secret` means `~/.pubky-tls-proxy/secret`.
 
