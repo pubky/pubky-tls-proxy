@@ -6,6 +6,8 @@ All notable changes are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.3.3] - 2026-09-29
+
 ### Security
 - Return a generic 502 response without backend addresses or OS errors; keep full diagnostics
   in server logs for plain HTTP and Pubky TLS backend failures.
@@ -83,7 +85,8 @@ All notable changes are documented here. The format is based on
 
 - First release candidate.
 
-[Unreleased]: https://github.com/pubky/pubky-tls-proxy/compare/v0.3.2...HEAD
+[Unreleased]: https://github.com/pubky/pubky-tls-proxy/compare/v0.3.3...HEAD
+[0.3.3]: https://github.com/pubky/pubky-tls-proxy/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/pubky/pubky-tls-proxy/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/pubky/pubky-tls-proxy/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/pubky/pubky-tls-proxy/compare/v0.2.0...v0.3.0
