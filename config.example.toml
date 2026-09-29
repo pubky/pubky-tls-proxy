@@ -47,10 +47,13 @@
 # idle_timeout_secs = 300       # No traffic in either direction
 
 
-# Keeping the pkarr packet available
-# ----------------------------------
-# The proxy republishes an existing packet; it does not create the first one.
-# Leave this on unless another service handles republishing.
+# Publishing the pkarr packet
+# ---------------------------
+# To publish records directly, create dns-records.toml beside this file with an
+# A record for your public address and an HTTPS record for the proxy's port.
+# The proxy publishes valid edits automatically. Without that file, it
+# republishes an externally published packet unchanged.
+# Leave this on unless another service handles publishing.
 [republish]
 # enabled = true
 # interval_secs = 3600          # One hour between runs
@@ -63,5 +66,6 @@
 # Setting either list replaces its defaults. Use [] to disable that network.
 # Do not disable both networks while republishing is enabled.
 [pkarr]
+# records_file = "dns-records.toml" # optional; detected beside this file
 # bootstrap_nodes = ["router.bittorrent.com:6881"]
 # relays = ["https://pkarr.pubky.app"]

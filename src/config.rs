@@ -32,6 +32,7 @@ const DEFAULT_HTTP_BACKEND_ADDR: SocketAddr =
 const DEFAULT_REPUBLISH_INTERVAL_SECS: u64 = 60 * 60;
 /// Relative to the config directory, like every relative path.
 const DEFAULT_PACKET_CACHE_FILE: &str = "pkarr-packet.cache";
+const DEFAULT_RECORDS_FILE: &str = "dns-records.toml";
 
 /// Same list as `mainline::rpc::DEFAULT_BOOTSTRAP_NODES` (mainline 8), which pkarr doesn't re-export.
 const DEFAULT_DHT_BOOTSTRAP_NODES: [&str; 4] = [
@@ -74,6 +75,7 @@ struct RepublishFileConfig {
 struct PkarrFileConfig {
     bootstrap_nodes: Option<Vec<String>>,
     relays: Option<Vec<String>>,
+    records_file: Option<PathBuf>,
 }
 
 /// Validated settings with all paths resolved and defaults applied.
@@ -88,6 +90,8 @@ pub struct Settings {
     pub plain_http: bool,
     pub send_proxy_protocol: bool,
     pub limits: ConnectionLimits,
+    /// The optional DNS file to validate, including when --check disables publication.
+    pub records_file: Option<PathBuf>,
     /// `None` if republishing is disabled.
     pub republish: Option<RepublishSettings>,
 }
@@ -98,6 +102,8 @@ pub struct RepublishSettings {
     pub interval: Duration,
     /// Where the last known pkarr packet is kept, see `packet_cache.rs`.
     pub cache_file: PathBuf,
+    /// Present when the operator owns the complete record set locally.
+    pub records_file: Option<PathBuf>,
     /// Resolved DHT bootstrap nodes. `None` disables the DHT.
     pub dht_bootstrap_nodes: Option<Vec<SocketAddrV4>>,
     /// `None` disables relays.
@@ -136,8 +142,18 @@ impl Settings {
         let limits = connection_limits(&args, &file)?;
 
         let is_republish_enabled = !args.no_republish && file.republish.enabled.unwrap_or(true);
+        let records_file = if is_republish_enabled || args.check {
+            records_file(&args, &file, &location)?
+        } else {
+            None
+        };
         let republish = if is_republish_enabled {
-            Some(republish_settings(&args, &file, &location)?)
+            Some(republish_settings(
+                &args,
+                &file,
+                &location,
+                records_file.clone(),
+            )?)
         } else {
             None
         };
@@ -154,6 +170,7 @@ impl Settings {
             plain_http: !args.no_plain_http && file.plain_http.unwrap_or(true),
             send_proxy_protocol: !args.no_proxy_protocol && file.proxy_protocol.unwrap_or(true),
             limits,
+            records_file,
             republish,
         })
     }
@@ -287,6 +304,7 @@ fn republish_settings(
     args: &Args,
     file: &FileConfig,
     location: &ConfigLocation,
+    records_file: Option<PathBuf>,
 ) -> Result<RepublishSettings> {
     let interval_secs = args
         .republish_interval_secs
@@ -321,6 +339,9 @@ fn republish_settings(
 
     let dht_bootstrap_nodes = if bootstrap_nodes.is_empty() {
         None
+    } else if args.check {
+        // --check validates local input without contacting DNS or any pkarr network.
+        Some(Vec::new())
     } else {
         Some(resolve_bootstrap_nodes(&bootstrap_nodes)?)
     };
@@ -337,9 +358,33 @@ fn republish_settings(
     Ok(RepublishSettings {
         interval: Duration::from_secs(interval_secs),
         cache_file: location.resolve(&cache_file),
+        records_file,
         dht_bootstrap_nodes,
         relays,
     })
+}
+
+fn records_file(
+    args: &Args,
+    file: &FileConfig,
+    location: &ConfigLocation,
+) -> Result<Option<PathBuf>> {
+    // An explicit path is required; the default file is used only when present.
+    let configured = args
+        .dns_records_file
+        .clone()
+        .or(file.pkarr.records_file.clone());
+    match configured {
+        Some(path) => {
+            let path = location.resolve(&path);
+            ensure!(path.is_file(), "DNS records file {path:?} does not exist");
+            Ok(Some(path))
+        }
+        None => {
+            let path = location.resolve(Path::new(DEFAULT_RECORDS_FILE));
+            Ok(path.is_file().then_some(path))
+        }
+    }
 }
 
 /// Resolves `host:port` bootstrap nodes to the IPv4 addresses mainline can use.
@@ -842,5 +887,23 @@ mod tests {
         let nodes = vec!["does-not-exist.invalid:6881".to_string()];
 
         assert!(resolve_bootstrap_nodes(&nodes).is_err());
+    }
+
+    #[test]
+    fn default_records_file_is_detected_and_explicit_missing_file_fails() {
+        let home = FakeHome::with_config("[pkarr]\nbootstrap_nodes = []\n");
+        let path = home.config_dir().join(DEFAULT_RECORDS_FILE);
+        fs::write(&path, "records = []").unwrap();
+        let settings = home.load(Args::default()).unwrap();
+        assert_eq!(settings.records_file, Some(path.clone()));
+        assert_eq!(settings.republish.unwrap().records_file, Some(path));
+
+        let error = home
+            .load(Args {
+                dns_records_file: Some("missing.toml".into()),
+                ..Args::default()
+            })
+            .unwrap_err();
+        assert!(error.to_string().contains("does not exist"), "{error}");
     }
 }

@@ -1,8 +1,8 @@
 //! A copy of the pkarr packet on disk.
 //!
-//! If the packet disappears from the DHT and the relays, the republisher can't resolve it
-//! any more. With a cached copy it can still publish it again. The cache only ever holds a
-//! packet that was signed with our key; it never creates or re-signs one.
+//! If an externally managed packet disappears from the DHT and relays, the republisher
+//! can publish the cached copy. For locally managed records the cache tracks the latest
+//! signed timestamp, while the records file remains authoritative.
 //!
 //! The file holds one packet in pkarr's [`SignedPacket::serialize`] format.
 

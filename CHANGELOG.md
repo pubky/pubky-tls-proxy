@@ -7,6 +7,9 @@ All notable changes are documented here. The format is based on
 ## [Unreleased]
 
 ### Added
+- Publish a complete pkarr DNS packet from optional `dns-records.toml`, automatically reload
+  edits, and validate records offline with `--check`. Existing external-packet republishing
+  remains the default when no records file is present.
 - Create a commented starter `~/.pubky-tls-proxy/config.toml` on first startup,
   without overwriting an existing config.
 - Generate and persist a secret key on first startup if missing, defaulting to

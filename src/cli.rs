@@ -65,7 +65,7 @@ pub struct Args {
     #[arg(long)]
     pub idle_timeout_secs: Option<u64>,
 
-    /// Don't republish the pkarr packet.
+    /// Disable publishing and republishing the pkarr packet.
     #[arg(long)]
     pub no_republish: bool,
 
@@ -78,6 +78,15 @@ pub struct Args {
     /// [default: pkarr-packet.cache]
     #[arg(long, value_name = "FILE")]
     pub packet_cache_file: Option<PathBuf>,
+
+    /// Publish the complete DNS record set from this TOML file. Defaults to dns-records.toml
+    /// beside the config file if it exists.
+    #[arg(long, value_name = "FILE")]
+    pub dns_records_file: Option<PathBuf>,
+
+    /// Validate the configuration and DNS records offline without creating a key or listeners.
+    #[arg(long)]
+    pub check: bool,
 
     /// Mainline DHT bootstrap node. Can be repeated. Replaces the default bootstrap nodes.
     #[arg(

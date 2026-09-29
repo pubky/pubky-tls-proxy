@@ -17,7 +17,7 @@ You need:
 - A server with a public IPv4 address and a user with `sudo` access. Open **TCP ports 80, 443 and 8443** in the server and cloud firewalls.
 - A domain pointing to that address. This guide uses `example.com`; **replace it with your domain everywhere**, including in file names and configuration examples.
 - Your Pubky secret key in a file containing 32 bytes as hex (64 characters). Copy it to your home directory on the server; for example, from your computer: `scp secret your-user@example.com:~/secret`.
-- An **already published pkarr packet** for that key with an `A` record for your server and an `HTTPS` record specifying **port 8443**. The proxy republishes existing packets but does not create them.
+- Your server's public IPv4 address for the pkarr `A` record. The proxy creates and publishes the packet from the DNS records file below.
 
 Keep another copy of the secret key somewhere safe. The guide moves the server copy into `/etc`.
 
@@ -167,6 +167,30 @@ cache_file = "/var/lib/pubky-tls-proxy/pkarr-packet.cache"
 
 For other options, see [Configuration](../configuration.md).
 
+Create the DNS records file next to the config:
+
+```bash
+sudo nano /etc/pubky-tls-proxy/dns-records.toml
+```
+
+Replace `203.0.113.10` with the server's public IPv4 address and save:
+
+```toml
+[[records]]
+name = "@"
+type = "A"
+address = "203.0.113.10"
+
+[[records]]
+name = "@"
+type = "HTTPS"
+priority = 1
+target = "."
+port = 8443
+```
+
+Check the configuration offline with `sudo pubky-tls-proxy --config /etc/pubky-tls-proxy/config.toml --check`. Subsequent DNS edits are published automatically.
+
 ## 6. Start the proxy
 
 Create a systemd service:
@@ -253,8 +277,8 @@ Test with `sudo nginx -t` and reload with `sudo systemctl reload nginx`. Pubky c
 ## Troubleshooting
 
 - **Pubky clients can't connect:** Check that TCP port 8443 is open to your users (for a public site, source range `0.0.0.0/0`). From another machine, run `nc -vz -w 5 example.com 8443`. A timeout usually means a firewall is dropping traffic.
-- **Pubky clients go to the wrong port:** The pkarr `HTTPS` record must specify 8443. Republish the packet with the right port; clients may cache the old one for up to an hour.
-- **`No pkarr packet found`:** The proxy can't create a packet. Publish one with an `A` record for the server and an `HTTPS` record for port 8443, then restart the proxy.
+- **Pubky clients go to the wrong port:** Set `port = 8443` in `dns-records.toml`; clients may cache the old value until its TTL expires.
+- **`No pkarr packet found`:** Check that `dns-records.toml` exists beside the config and that publishing is enabled. Without a records file the proxy only republishes existing packets.
 - **DHT errors, but publishing to relays succeeds:** If your network blocks DHT (UDP), add `[pkarr]` and `bootstrap_nodes = []` to the config file. Restart the proxy; the relays publish to the DHT on your behalf.
 - **`502 Bad Gateway` for Pubky clients:** Check `sudo systemctl status nginx` and `sudo nginx -t`. nginx must listen on `127.0.0.1:8080` with `proxy_protocol` enabled.
 - **certbot fails:** Confirm the domain's A record points to this server and port 80 is open. Test `curl -I http://example.com`.

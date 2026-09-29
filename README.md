@@ -33,9 +33,10 @@ You will need:
   `~/.pubky-tls-proxy/secret`, or you can supply an existing key with `--secret-file`.
 - The proxy creates a commented `~/.pubky-tls-proxy/config.toml` on first startup.
   Edit it to customize the defaults; subsequent starts leave it alone.
-- A published pkarr packet for that key. It tells clients where to connect, with an
-  `A` record for your server's address and an `HTTPS` record for the proxy's port.
-  The proxy republishes an existing packet; you need to publish it once with another tool.
+- For automatic publishing, a `dns-records.toml` file beside your config with an
+  `A` record for your public address and an `HTTPS` record for the proxy's port.
+  Alternatively, publish a packet with another tool and let the proxy republish it.
+  See [DNS records](docs/configuration.md#publishing-dns-records).
 
 ## How it works
 
@@ -57,9 +58,9 @@ By default, the proxy sends the client's address to each backend using a
 configured to accept this header. If it doesn't support the PROXY protocol, use
 `--no-proxy-protocol`.
 
-The proxy also republishes your pkarr packet every hour and keeps a copy on disk.
-If the packet disappears from the network, it can republish the cached copy.
-It never creates a new packet or changes its records.
+With `dns-records.toml`, the proxy publishes changes automatically and republishes
+the packet every hour. Without the file, it keeps the existing behavior: republishing
+the latest network packet (or cached copy) unchanged, without signing new records.
 
 If a backend is unreachable, plain HTTP and Pubky TLS clients receive a
 `502 Bad Gateway`. Regular HTTPS connections are closed because only the backend

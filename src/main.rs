@@ -7,6 +7,7 @@ use tracing_subscriber::EnvFilter;
 
 mod cli;
 mod config;
+mod dns_records;
 mod forwarding;
 mod packet_cache;
 mod prefixed_stream;
@@ -29,12 +30,30 @@ const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 async fn main() -> Result<()> {
     init_logging();
 
-    let settings = Settings::load(cli::Args::parse())?;
+    let args = cli::Args::parse();
+    let check = args.check;
+    let settings = Settings::load(args)?;
+    let records = settings
+        .records_file
+        .as_ref()
+        .map(|path| dns_records::DnsRecords::load(path))
+        .transpose()?;
+    if check {
+        // Packet size is checked with a temporary key; --check never touches the real secret.
+        if let Some(records) = &records {
+            records.sign(&Keypair::random(), None)?;
+        }
+        info!("Configuration and DNS records are valid");
+        return Ok(());
+    }
     match &settings.config_file {
         Some(config_file) => info!("Using config file {config_file:?}"),
         None => info!("No config file found, using command line arguments and defaults"),
     }
     let keypair = secret::load_or_create_keypair(&settings.secret_file)?;
+    if let Some(records) = &records {
+        records.sign(&keypair, None)?;
+    }
 
     let proxy = Proxy::start(ProxyConfig {
         keypair: keypair.clone(),
@@ -49,7 +68,7 @@ async fn main() -> Result<()> {
     log_proxy_settings(&proxy, &settings);
 
     let republisher = match &settings.republish {
-        Some(republish) => Some(start_republisher(&keypair, republish)?),
+        Some(republish) => Some(start_republisher(&keypair, republish, records)?),
         None => {
             info!("Republishing the pkarr packet: off");
             None
@@ -137,7 +156,11 @@ fn log_proxy_settings(proxy: &Proxy, settings: &Settings) {
     info!("PROXY protocol header: {proxy_protocol_state}");
 }
 
-fn start_republisher(keypair: &Keypair, republish: &RepublishSettings) -> Result<Republisher> {
+fn start_republisher(
+    keypair: &Keypair,
+    republish: &RepublishSettings,
+    records: Option<dns_records::DnsRecords>,
+) -> Result<Republisher> {
     let mut networks = Vec::new();
     match &republish.dht_bootstrap_nodes {
         Some(bootstrap_nodes) => {
@@ -161,10 +184,15 @@ fn start_republisher(keypair: &Keypair, republish: &RepublishSettings) -> Result
     info!("Caching the pkarr packet in {:?}", republish.cache_file);
     let cache = PacketCache::new(republish.cache_file.clone(), keypair.public_key());
 
-    Ok(Republisher::start(
-        keypair.public_key(),
-        networks,
-        cache,
-        republish.interval,
-    ))
+    Ok(match (records, &republish.records_file) {
+        (Some(records), Some(path)) => Republisher::start_local(
+            keypair.clone(),
+            networks,
+            cache,
+            republish.interval,
+            path.clone(),
+            records,
+        ),
+        _ => Republisher::start(keypair.public_key(), networks, cache, republish.interval),
+    })
 }

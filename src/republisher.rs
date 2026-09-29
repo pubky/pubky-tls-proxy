@@ -1,18 +1,22 @@
-//! Keeps the pkarr packet of our public key alive by republishing it periodically.
+//! Publishes locally managed DNS records or keeps an externally signed packet alive.
 //!
 //! DHT nodes and relays drop packets after a while unless they are published again. The
-//! republisher resolves the most recent packet and publishes it again unchanged: same
-//! records, signature and timestamp. It never creates or re-signs a packet, so the packet
-//! must have been published by something else first.
+//! Without a local records file, the republisher resolves the most recent packet and
+//! publishes it again unchanged. With a records file, it signs the complete local record
+//! set and publishes valid edits promptly.
 
-use crate::packet_cache::PacketCache;
+use crate::{dns_records::DnsRecords, packet_cache::PacketCache};
 use anyhow::{Context, Result};
 use futures_util::future::join_all;
 use pkarr::{
     errors::{PublishError, ResolveError},
-    PublicKey, ResolvePolicy, SignedPacket, Timestamp,
+    Keypair, PublicKey, ResolvePolicy, SignedPacket, Timestamp,
 };
-use std::{net::SocketAddrV4, time::Duration};
+use std::{
+    net::SocketAddrV4,
+    path::{Path, PathBuf},
+    time::Duration,
+};
 use tokio::{sync::watch, task::JoinHandle};
 use tracing::{debug, error, info, warn};
 use url::Url;
@@ -353,6 +357,28 @@ impl Republisher {
         Self { task, shutdown_tx }
     }
 
+    /// Publishes the file's complete record set and checks for changes every three seconds.
+    pub fn start_local(
+        keypair: Keypair,
+        networks: Vec<PkarrNetwork>,
+        cache: PacketCache,
+        interval: Duration,
+        path: PathBuf,
+        records: DnsRecords,
+    ) -> Self {
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        let task = tokio::spawn(publish_local_periodically(
+            keypair,
+            networks,
+            cache,
+            interval,
+            path,
+            records,
+            shutdown_rx,
+        ));
+        Self { task, shutdown_tx }
+    }
+
     /// Stops republishing, also in the middle of a run.
     ///
     /// # Errors
@@ -368,6 +394,161 @@ impl Republisher {
             .with_context(|| format!("Republisher shutdown timed out after {timeout:?}"))?
             .context("Republisher task failed")
     }
+}
+
+/// The last valid local packet is kept in memory even if an edit is invalid or the file
+/// briefly disappears during replacement. Publication is cancelled when a new edit arrives.
+async fn publish_local_periodically(
+    keypair: Keypair,
+    networks: Vec<PkarrNetwork>,
+    cache: PacketCache,
+    interval: Duration,
+    path: PathBuf,
+    mut records: DnsRecords,
+    mut shutdown: watch::Receiver<bool>,
+) {
+    info!("Managing {} pkarr DNS records from {path:?}", records.len());
+    let mut ticker = tokio::time::interval(Duration::from_secs(3));
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let cached = cache.load().await;
+    let mut packet = match records.sign(&keypair, cached.as_ref().map(SignedPacket::timestamp)) {
+        Ok(packet) => packet,
+        Err(error) => {
+            error!("Cannot sign {path:?}: {error:#}");
+            return;
+        }
+    };
+    let mut pending = true;
+    let mut last_publish = tokio::time::Instant::now();
+    loop {
+        if pending || last_publish.elapsed() >= interval {
+            // Publishing to the networks is independent; retries on one never block the other.
+            let changed = {
+                let publication = publish_local(&keypair, &networks, &cache, &records, &mut packet);
+                tokio::pin!(publication);
+                loop {
+                    tokio::select! {
+                        completed = &mut publication => {
+                            pending = !completed;
+                            last_publish = tokio::time::Instant::now();
+                            break None;
+                        }
+                        _ = ticker.tick() => {
+                            if let Some(updated) = read_updated_records(&path, &records) {
+                                break Some(updated);
+                            }
+                        }
+                        _ = shutdown.changed() => return,
+                    }
+                }
+            };
+            if let Some(updated) = changed {
+                match updated.sign(&keypair, Some(packet.timestamp())) {
+                    Ok(new_packet) => {
+                        records = updated;
+                        packet = new_packet;
+                        pending = true;
+                        info!(
+                            "DNS records changed in {path:?}; publishing {} records",
+                            records.len()
+                        );
+                    }
+                    Err(error) => error!("Cannot sign {path:?}: {error:#}"),
+                }
+                continue;
+            }
+        }
+        tokio::select! {
+            _ = ticker.tick() => {
+                if let Some(updated) = read_updated_records(&path, &records) {
+                    match updated.sign(&keypair, Some(packet.timestamp())) {
+                        Ok(new_packet) => {
+                            records = updated;
+                            packet = new_packet;
+                            pending = true;
+                            info!("DNS records changed in {path:?}; publishing {} records", records.len());
+                        }
+                        Err(error) => error!("Cannot sign {path:?}: {error:#}"),
+                    }
+                }
+            }
+            _ = tokio::time::sleep_until(last_publish + interval) => {}
+            _ = shutdown.changed() => break,
+        }
+    }
+}
+
+fn read_updated_records(path: &Path, current: &DnsRecords) -> Option<DnsRecords> {
+    match DnsRecords::load(path) {
+        Ok(next) if next != *current => Some(next),
+        Ok(_) => None,
+        Err(error) => {
+            warn!("Keeping the last valid DNS records: {error:#}");
+            None
+        }
+    }
+}
+
+/// Resolve a conflict before re-signing: pkarr rejects any packet older than the newest
+/// timestamp on a network. A finite retry bound avoids fighting another active writer forever.
+async fn publish_local(
+    keypair: &Keypair,
+    networks: &[PkarrNetwork],
+    cache: &PacketCache,
+    records: &DnsRecords,
+    packet: &mut SignedPacket,
+) -> bool {
+    for attempt in 0..3 {
+        // Persist before publishing so a failed network request cannot lose the packet.
+        if let Err(error) = cache.store(packet).await {
+            warn!(
+                "Cannot cache local pkarr packet in {:?}: {error:#}",
+                cache.path()
+            );
+        }
+        let results = join_all(
+            networks
+                .iter()
+                .map(|network| publish_with_retries(network, packet, &RETRY_DELAYS)),
+        )
+        .await;
+        let mut success = true;
+        let mut conflict = false;
+        for (network, result) in networks.iter().zip(results) {
+            match result {
+                PublishResult::Published => {
+                    info!("Published local pkarr packet to {}", network.name)
+                }
+                PublishResult::NewerPacketExists => {
+                    conflict = true;
+                    success = false;
+                    warn!("{} has a newer pkarr packet", network.name);
+                }
+                PublishResult::Failed(error) => {
+                    success = false;
+                    error!("Publishing to {} failed: {error}", network.name);
+                }
+            }
+        }
+        if !conflict {
+            return success;
+        }
+        if attempt == 2 {
+            break;
+        }
+        let newer = resolve_most_recent(&keypair.public_key(), networks).await;
+        let previous = most_recent_packet(newer.packet(), Some(packet.clone()))
+            .map(|(packet, _)| packet.timestamp());
+        match records.sign(keypair, previous) {
+            Ok(replacement) => *packet = replacement,
+            Err(error) => {
+                error!("Cannot re-sign local pkarr records: {error:#}");
+                break;
+            }
+        }
+    }
+    error!("Local pkarr packet was rejected repeatedly; another publisher may be using this key");
+    false
 }
 
 async fn republish_periodically(
@@ -438,6 +619,7 @@ mod tests {
     use super::*;
     use mainline::Testnet;
     use pkarr::Keypair;
+    use std::fs;
     use tempfile::TempDir;
 
     /// A local DHT, so tests don't need internet access.
@@ -724,5 +906,199 @@ mod tests {
             publish_with_retries(&dht.network(), &older_packet, &[Duration::from_secs(3600)]).await;
 
         assert!(matches!(result, PublishResult::NewerPacketExists));
+    }
+
+    #[tokio::test]
+    async fn local_file_publishes_new_records_and_removes_deleted_records() {
+        let dht = LocalDht::start().await;
+        let keypair = Keypair::random();
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("dns-records.toml");
+        fs::write(&path, "[[records]]\nname='@'\ntype='A'\naddress='203.0.113.10'\n[[records]]\nname='_old'\ntype='TXT'\ntext='old'").unwrap();
+        let records = DnsRecords::load(&path).unwrap();
+        let cache = PacketCache::new(dir.path().join("cache"), keypair.public_key());
+        let publisher = Republisher::start_local(
+            keypair.clone(),
+            vec![dht.network()],
+            cache,
+            Duration::from_secs(3600),
+            path.clone(),
+            records,
+        );
+        let first = tokio::time::timeout(Duration::from_secs(20), async {
+            loop {
+                if let Ok(packet) = dht
+                    .network()
+                    .client
+                    .resolve(&keypair.public_key(), ResolvePolicy::NetworkOnly)
+                    .await
+                {
+                    if packet.all_resource_records().count() == 2 {
+                        break packet;
+                    }
+                }
+                tokio::time::sleep(Duration::from_millis(200)).await;
+            }
+        })
+        .await
+        .unwrap();
+
+        fs::write(
+            &path,
+            "[[records]]\nname='@'\ntype='A'\naddress='203.0.113.11'",
+        )
+        .unwrap();
+        let second = tokio::time::timeout(Duration::from_secs(20), async {
+            loop {
+                if let Ok(packet) = dht
+                    .network()
+                    .client
+                    .resolve(&keypair.public_key(), ResolvePolicy::NetworkOnly)
+                    .await
+                {
+                    if packet.timestamp() > first.timestamp()
+                        && packet.all_resource_records().count() == 1
+                    {
+                        break packet;
+                    }
+                }
+                tokio::time::sleep(Duration::from_millis(200)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(second.all_resource_records().count(), 1);
+        publisher.shutdown(None).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn local_records_override_a_newer_external_packet() {
+        let dht = LocalDht::start().await;
+        let keypair = Keypair::random();
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("dns-records.toml");
+        fs::write(
+            &path,
+            "[[records]]\nname='@'\ntype='A'\naddress='203.0.113.10'",
+        )
+        .unwrap();
+        let records = DnsRecords::load(&path).unwrap();
+        let newer = SignedPacket::builder()
+            .txt(
+                "_other".try_into().unwrap(),
+                "external".try_into().unwrap(),
+                300,
+            )
+            .timestamp(Timestamp::from(
+                (Timestamp::now().as_u64() + 1_000_000).to_be_bytes(),
+            ))
+            .sign(&keypair)
+            .unwrap();
+        dht.publish(&newer).await;
+        let cache = PacketCache::new(dir.path().join("cache"), keypair.public_key());
+        let mut packet = records.sign(&keypair, None).unwrap();
+        assert!(publish_local(&keypair, &[dht.network()], &cache, &records, &mut packet).await);
+        let resolved = dht.resolve(&keypair.public_key()).await;
+        assert!(resolved.timestamp() > newer.timestamp());
+        assert_eq!(resolved.all_resource_records().count(), 1);
+    }
+
+    #[tokio::test]
+    async fn invalid_live_edit_keeps_last_valid_packet_until_corrected() {
+        let dht = LocalDht::start().await;
+        let keypair = Keypair::random();
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("dns-records.toml");
+        fs::write(
+            &path,
+            "[[records]]\nname='@'\ntype='A'\naddress='203.0.113.10'",
+        )
+        .unwrap();
+        let records = DnsRecords::load(&path).unwrap();
+        let cache = PacketCache::new(dir.path().join("cache"), keypair.public_key());
+        let publisher = Republisher::start_local(
+            keypair.clone(),
+            vec![dht.network()],
+            cache,
+            Duration::from_secs(3600),
+            path.clone(),
+            records,
+        );
+        let original = tokio::time::timeout(Duration::from_secs(20), async {
+            loop {
+                if let Ok(packet) = dht
+                    .network()
+                    .client
+                    .resolve(&keypair.public_key(), ResolvePolicy::NetworkOnly)
+                    .await
+                {
+                    break packet;
+                }
+                tokio::time::sleep(Duration::from_millis(200)).await;
+            }
+        })
+        .await
+        .unwrap();
+        fs::write(&path, "[[records]]\nname='@'\ntype='A'\naddress='invalid'").unwrap();
+        tokio::time::sleep(Duration::from_secs(4)).await;
+        assert_eq!(
+            dht.resolve(&keypair.public_key()).await.as_bytes(),
+            original.as_bytes()
+        );
+        fs::write(
+            &path,
+            "[[records]]\nname='@'\ntype='A'\naddress='203.0.113.11'",
+        )
+        .unwrap();
+        tokio::time::timeout(Duration::from_secs(20), async {
+            loop {
+                if dht.resolve(&keypair.public_key()).await.timestamp() > original.timestamp() {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(200)).await;
+            }
+        })
+        .await
+        .unwrap();
+        publisher.shutdown(None).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn edit_cancels_network_retry_and_caches_the_new_packet() {
+        let keypair = Keypair::random();
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("dns-records.toml");
+        fs::write(
+            &path,
+            "[[records]]\nname='@'\ntype='A'\naddress='203.0.113.10'",
+        )
+        .unwrap();
+        let records = DnsRecords::load(&path).unwrap();
+        let cache = PacketCache::new(dir.path().join("cache"), keypair.public_key());
+        let publisher = Republisher::start_local(
+            keypair.clone(),
+            vec![unreachable_relay()],
+            cache,
+            Duration::from_secs(3600),
+            path.clone(),
+            records,
+        );
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        fs::write(
+            &path,
+            "[[records]]\nname='@'\ntype='A'\naddress='203.0.113.11'",
+        )
+        .unwrap();
+        let cache = PacketCache::new(dir.path().join("cache"), keypair.public_key());
+        tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                if let Some(packet) = cache.load().await {
+                    if matches!(packet.all_resource_records().next().map(|r| &r.rdata),
+                        Some(pkarr::dns::rdata::RData::A(a)) if a.address == u32::from("203.0.113.11".parse::<std::net::Ipv4Addr>().unwrap())) { break; }
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        }).await.unwrap();
+        publisher.shutdown(None).await.unwrap();
     }
 }
