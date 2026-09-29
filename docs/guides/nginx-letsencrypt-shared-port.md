@@ -14,7 +14,7 @@ The proxy decrypts Pubky TLS but passes browser HTTPS through untouched, so ngin
 
 You need a server with `sudo` access, TCP ports **80 and 443** open to the public, and a domain whose A record points to your server. This guide calls that domain `example.com`: **replace it with yours in every file name, command, and configuration example**.
 
-You also need your Pubky secret key (32 bytes as hex) and an **already published pkarr packet** for that key, with an A record pointing to the server and an HTTPS record for **port 443**. The proxy republishes existing packets; it doesn't create one. Copy your secret file to your home directory on the server, for example `scp secret your-user@example.com:~/secret`. Keep an offline backup.
+You also need your Pubky secret key (32 bytes as hex) and the server's public IPv4 address. The proxy publishes the pkarr packet from the DNS records file below. Copy your secret file to your home directory on the server, for example `scp secret your-user@example.com:~/secret`. Keep an offline backup.
 
 ## 1. Install nginx and certbot
 
@@ -132,6 +132,24 @@ https_backend_addr = "127.0.0.1:8443"
 [republish]
 cache_file = "/var/lib/pubky-tls-proxy/pkarr-packet.cache"
 ```
+
+Create `/etc/pubky-tls-proxy/dns-records.toml` with `sudo nano /etc/pubky-tls-proxy/dns-records.toml`. Replace `203.0.113.10` with your server's public IPv4 address:
+
+```toml
+[[records]]
+name = "@"
+type = "A"
+address = "203.0.113.10"
+
+[[records]]
+name = "@"
+type = "HTTPS"
+priority = 1
+target = "."
+port = 443
+```
+
+Check it offline with `sudo pubky-tls-proxy --config /etc/pubky-tls-proxy/config.toml --check`. The proxy publishes future valid edits automatically.
 
 ## 5. Start the proxy
 
@@ -274,8 +292,8 @@ Keep the `/.well-known/acme-challenge/` block in the second server block, so cer
 ## Troubleshooting
 
 - **The proxy can't bind port 80 or 443:** Something else uses it, often nginx's default site. Run `sudo ss -tlnp` and check that no nginx site listens on a public port.
-- **Pubky clients can't connect:** Your pkarr packet must contain an A record for the server and an HTTPS record for port **443**. Publish the correct packet; clients may cache an old one for up to an hour.
-- **`No pkarr packet found`:** The proxy only republishes; it doesn't create packets. Publish one before starting it.
+- **Pubky clients can't connect:** Check the A address and `port = 443` in `dns-records.toml`; clients may cache an old value until its TTL expires.
+- **`No pkarr packet found`:** Check that `dns-records.toml` exists beside the config and publishing is enabled. Without the file the proxy only republishes existing packets.
 - **DHT errors, but relay republishing works:** If your network blocks DHT (UDP), add `[pkarr]` and `bootstrap_nodes = []` to the config. Restart the proxy. The relays publish to the DHT for you.
 - **`502 Bad Gateway`:** nginx must listen on `127.0.0.1:8080`. Check `sudo nginx -t` and `sudo systemctl status nginx`.
 - **Browser HTTPS disconnects:** Check that nginx listens on `127.0.0.1:8443` with `ssl proxy_protocol` and that the proxy config names it as `https_backend_addr`.

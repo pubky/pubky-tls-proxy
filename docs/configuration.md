@@ -21,12 +21,14 @@ pubky-tls-proxy [--config <FILE>] [--secret-file <FILE>] [--listen-addr <ADDR>].
 - `--handshake-timeout-secs`: Maximum time to complete a Pubky TLS handshake after traffic detection [default: 10].
 - `--backend-timeout-secs`: Maximum time to connect to a backend and send its PROXY header [default: 10].
 - `--idle-timeout-secs`: Close an established connection after this many seconds without data transfer in either direction [default: 300]. Active connections have no maximum lifetime.
-- `--no-republish`: Don't [republish](#republishing-the-pkarr-packet) the pkarr packet.
+- `--no-republish`: Disable pkarr publishing and republishing.
 - `--republish-interval-secs`: Seconds between two republish runs [default: 3600].
 - `--packet-cache-file`: Where the [packet cache](#packet-cache) is kept [default: `pkarr-packet.cache` in the config directory].
 - `--pkarr-bootstrap-node`: Mainline DHT bootstrap node (`host:port`). Can be repeated. Replaces the default bootstrap nodes.
 - `--pkarr-relay`: Pkarr relay URL. Can be repeated. Replaces the default relays.
 - `--no-pkarr-dht` / `--no-pkarr-relays`: Don't republish to the DHT / to relays.
+- `--dns-records-file`: Use this TOML file as the complete pkarr record set. The default `dns-records.toml` beside the config is used if present.
+- `--check`: Validate configuration and DNS records offline, without creating a key, starting listeners, or publishing.
 
 Relative paths are resolved against the directory of the config file, both in the file and on the command line. By default that's `~/.pubky-tls-proxy/`, even if no config file exists there. So `--secret-file secret` means `~/.pubky-tls-proxy/secret`.
 
@@ -53,6 +55,7 @@ interval_secs = 3600
 cache_file = "pkarr-packet.cache"
 
 [pkarr]
+# records_file = "dns-records.toml" # optional; auto-detected if present
 # A list replaces the defaults. An empty list disables that network.
 bootstrap_nodes = ["router.bittorrent.com:6881", "dht.transmissionbt.com:6881", "dht.libtorrent.org:25401", "relay.pkarr.org:6881"]
 relays = ["https://pkarr.pubky.app", "https://pkarr.pubky.org"]
@@ -66,7 +69,9 @@ To dedicate a listen port to Pubky TLS, set `plain_http = false` and leave `http
 
 DHT nodes and relays forget pkarr packets after a while unless they are published again. The proxy therefore republishes the packet of its public key: right after startup, then every `interval_secs`.
 
-Each run resolves the most recent packet from the DHT and the relays and publishes it again **unchanged**: same records, signature and timestamp. The proxy never creates or re-signs a packet, so you still need to publish the packet once with another tool. If no packet is found, neither on the networks nor in the [packet cache](#packet-cache), a warning is logged.
+Without a DNS records file, each run resolves the most recent packet from the DHT and the relays and publishes it again **unchanged**: same records, signature and timestamp. You must publish that packet once with another tool. If no packet is found, neither on the networks nor in the [packet cache](#packet-cache), a warning is logged.
+
+With a [DNS records file](#publishing-dns-records), the proxy signs and publishes the file itself and checks for changes every three seconds. `enabled = false` or `--no-republish` disables both modes.
 
 Each network is published to separately. A failed publish is retried after 1 and 5 minutes, then logged as an error. The next run starts at the next interval.
 
@@ -79,8 +84,39 @@ If the host's network blocks mainline DHT traffic (UDP), e.g. through a restrict
 The proxy keeps a copy of the most recent packet in `pkarr-packet.cache`, next to the config file by default. If the packet ever disappears from the DHT and the relays, the proxy republishes this copy instead. It also does so if the networks only return an older packet than the cached one.
 
 - The cache is always on while republishing is on. Change its location with `cache_file` or `--packet-cache-file`. The directory must be writable by the proxy.
-- The file holds one packet in pkarr's `SignedPacket::serialize` format. It's only replaced by a newer packet from the networks.
+- The file holds one packet in pkarr's `SignedPacket::serialize` format. In external-records mode it's only replaced by a newer packet from the networks.
 - On every run the file is checked: a packet for another public key, with an invalid signature, or a corrupt file is ignored with a warning.
+
+In local-records mode the cache is written before publishing but is never used as the source of records. A restart signs the current file again. An invalid edit or a temporarily missing file leaves the last valid packet in memory until the file is fixed.
+
+## Publishing DNS records
+
+Place `dns-records.toml` next to `config.toml` (or specify `[pkarr] records_file = "path/to/file.toml"` or `--dns-records-file`). An explicitly selected file must exist. The file is authoritative: removing a record removes it from the next published packet; records from the network are never merged into it.
+
+```toml
+default_ttl = 300
+
+[[records]]
+name = "@"
+type = "A"
+address = "203.0.113.10" # replace with your server's public IPv4 address
+
+[[records]]
+name = "@"
+type = "HTTPS"
+priority = 1
+target = "."
+port = 8443 # use 443 for a shared-port setup
+
+[[records]]
+name = "_demo"
+type = "TXT"
+text = "hello"
+```
+
+Owner `name` is relative to the public key (`@` is the apex). `target` is a literal DNS name: `.` means the current host in an HTTPS/SVCB service record; use a fully qualified DNS name with a trailing dot for external CNAME or service targets. Supported `type` values: `A`, `AAAA`, `CNAME`, `TXT`, `HTTPS`, `SVCB`. For `HTTPS` and `SVCB`, set `priority` and `target`; optional service fields are `port`, `alpn = ["h2", "http/1.1"]`, `no_default_alpn = true`, `ipv4hint = ["203.0.113.10"]`, and `ipv6hint = ["2001:db8::1"]`. Priority 0 is alias mode and cannot have service fields. `ttl` on a record overrides `default_ttl` (300 seconds). TTLs must be positive; a port must be nonzero. The complete encoded packet must fit pkarr's 1000-byte DNS packet limit.
+
+Run `pubky-tls-proxy --config /etc/pubky-tls-proxy/config.toml --check` before restarting. Invalid files at startup fail with a diagnostic; invalid live edits leave the last valid packet in place and are logged until corrected. Edits to comments, spacing, and record order do not cause a new publication. Valid changes publish promptly; clients may still cache old records until their TTL expires. If another writer uses the same secret, the proxy tries to publish a newer locally signed packet and logs repeated conflicts. To return to externally managed packets, remove the default file and restart (or remove an explicitly configured `records_file` setting as well).
 
 ## PROXY protocol
 
@@ -128,7 +164,7 @@ pubky-tls-proxy
 ```
 
 The startup log shows the public key and the generated secret file's location, never the
-secret itself. The proxy doesn't publish a pkarr packet for a new key. Publish one with
-an `A` record for the server and an `HTTPS` record for the proxy's listen port before
-clients can discover it. That's port 8443 in the [recommended nginx guide](guides/nginx-letsencrypt.md),
+secret itself. To make a new key discoverable, create a [DNS records file](#publishing-dns-records)
+with an `A` record for the server and an `HTTPS` record for the proxy's listen port.
+That's port 8443 in the [recommended nginx guide](guides/nginx-letsencrypt.md),
 or 443 in the [shared-port guide](guides/nginx-letsencrypt-shared-port.md).
