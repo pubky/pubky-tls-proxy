@@ -24,7 +24,7 @@ pub struct Args {
     pub config: Option<PathBuf>,
 
     /// File containing the pkarr secret key in HEX format.
-    /// Relative to the config file's directory.
+    /// Created automatically if missing. Relative to the config file's directory. [default: secret]
     #[arg(long, value_name = "FILE")]
     pub secret_file: Option<PathBuf>,
 
