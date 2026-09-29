@@ -47,11 +47,8 @@ pub async fn forward_plain_http(
     {
         Ok(stream) => stream,
         Err(error) => {
-            let _ = tokio::time::timeout(
-                ERROR_RESPONSE_TIMEOUT,
-                send_bad_gateway(&mut client, &error),
-            )
-            .await;
+            let _ =
+                tokio::time::timeout(ERROR_RESPONSE_TIMEOUT, send_bad_gateway(&mut client)).await;
             return Err(error);
         }
     };
@@ -126,8 +123,9 @@ async fn establish_backend_connection(
 }
 
 /// Best effort: the connection is closed afterwards either way.
-async fn send_bad_gateway(client: &mut (impl AsyncWrite + Unpin), error: &anyhow::Error) {
-    let body = format!("Backend connection error: {error:#}");
+/// Backend diagnostics stay in the error returned to the caller for server-side logging.
+async fn send_bad_gateway(client: &mut (impl AsyncWrite + Unpin)) {
+    let body = "Bad Gateway\n";
     let response = format!(
         "HTTP/1.1 502 Bad Gateway\r\n\
          Content-Type: text/plain\r\n\

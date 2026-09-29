@@ -155,11 +155,15 @@ async fn plain_http_with_backend_down_gets_bad_gateway() -> Result<()> {
     let mut client = TcpStream::connect(proxy.listen_addrs()[0]).await?;
     let response = send_http_post(&mut client, "hello").await?;
 
-    assert!(
-        response.starts_with("HTTP/1.1 502 Bad Gateway"),
-        "{response}"
+    assert_eq!(
+        response,
+        "HTTP/1.1 502 Bad Gateway\r\n\
+         Content-Type: text/plain\r\n\
+         Content-Length: 12\r\n\
+         Connection: close\r\n\
+         \r\n\
+         Bad Gateway\n"
     );
-    assert!(response.contains("Backend connection error"), "{response}");
 
     proxy.shutdown(None).await
 }
@@ -394,8 +398,10 @@ async fn pubky_tls_with_backend_down_gets_bad_gateway() -> Result<()> {
         .context("Failed to get response from proxy")?;
 
     assert_eq!(response.status(), reqwest::StatusCode::BAD_GATEWAY);
+    assert_eq!(response.headers()["content-length"], "12");
+    assert_eq!(response.headers()["connection"], "close");
     let body = response.text().await?;
-    assert!(body.contains("Backend connection error"), "{body}");
+    assert_eq!(body, "Bad Gateway\n");
 
     proxy.shutdown(None).await
 }
