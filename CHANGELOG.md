@@ -9,6 +9,7 @@ All notable changes are documented here. The format is based on
 ### Fixed
 - Drain active connections during shutdown for up to five seconds, then cancel remaining
   transfers and report a timeout instead of silently truncating them on a successful exit.
+- Handle SIGTERM as well as Ctrl+C on Unix, so service and container stops run application cleanup.
 
 ### Changed
 - Reworked the README with a plain-language introduction, clearer setup choices,

@@ -94,9 +94,13 @@ The proxy logs to stdout at `info` level. Set `RUST_LOG` for more detail, e.g. `
 
 ## Shutdown
 
-On Ctrl+C, the proxy stops accepting connections and stops packet republishing. Active
-connections have up to five seconds to finish. If any remain, they are cancelled and the
-process exits with a shutdown timeout error.
+On Unix, both Ctrl+C (SIGINT) and SIGTERM run the application's shutdown handler.
+This includes the SIGTERM sent by systemd and container runtimes when stopping the service.
+Other platforms use Ctrl+C.
+
+The proxy stops accepting connections and stops packet republishing. Active connections
+have up to five seconds to finish. If any remain, they are cancelled and the process exits
+with a shutdown timeout error.
 
 ## Running directly in front of a Pubky homeserver
 

@@ -2,7 +2,6 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use pkarr::Keypair;
 use std::{fs, io::IsTerminal, path::Path, time::Duration};
-use tokio::signal;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
@@ -56,10 +55,7 @@ async fn main() -> Result<()> {
         }
     };
 
-    info!("Press Ctrl+C to stop the proxy");
-    signal::ctrl_c()
-        .await
-        .context("Failed to listen for Ctrl+C")?;
+    wait_for_shutdown_signal().await?;
     info!("Received shutdown signal, shutting down...");
 
     // Stop both services together; a republisher error must not skip connection draining.
@@ -76,6 +72,29 @@ async fn main() -> Result<()> {
     info!("Shutdown complete.");
 
     Ok(())
+}
+
+/// Registers shutdown handlers before announcing readiness to receive a signal.
+#[cfg(unix)]
+async fn wait_for_shutdown_signal() -> Result<()> {
+    use tokio::signal::unix::{signal, SignalKind};
+
+    let mut interrupt = signal(SignalKind::interrupt()).context("Failed to listen for SIGINT")?;
+    let mut terminate = signal(SignalKind::terminate()).context("Failed to listen for SIGTERM")?;
+    info!("Press Ctrl+C to stop the proxy (SIGTERM also supported)");
+    tokio::select! {
+        _ = interrupt.recv() => {}
+        _ = terminate.recv() => {}
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+async fn wait_for_shutdown_signal() -> Result<()> {
+    info!("Press Ctrl+C to stop the proxy");
+    tokio::signal::ctrl_c()
+        .await
+        .context("Failed to listen for Ctrl+C")
 }
 
 /// Default log filter when `RUST_LOG` isn't set. rustls warns about clients that break the
