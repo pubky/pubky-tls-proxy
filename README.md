@@ -31,6 +31,8 @@ You will need:
 - A web server or HTTP service for the proxy to forward requests to.
 - A Pubky secret key. The proxy generates one on first startup at
   `~/.pubky-tls-proxy/secret`, or you can supply an existing key with `--secret-file`.
+- The proxy creates a commented `~/.pubky-tls-proxy/config.toml` on first startup.
+  Edit it to customize the defaults; subsequent starts leave it alone.
 - A published pkarr packet for that key. It tells clients where to connect, with an
   `A` record for your server's address and an `HTTPS` record for the proxy's port.
   The proxy republishes an existing packet; you need to publish it once with another tool.
