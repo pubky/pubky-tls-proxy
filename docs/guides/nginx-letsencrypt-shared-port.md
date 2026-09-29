@@ -107,33 +107,25 @@ Check that the help output includes `--dns-records-file` and `--check`.
 
 ## 4. Configure the proxy
 
-Create a service user and a directory for the configuration files:
+Run the proxy as your normal login user. Keep its configuration, secret, and packet cache together in `~/.pubky-tls-proxy/`. Create the directory without `sudo`:
 
 ```bash
-sudo useradd --system --no-create-home --shell /usr/sbin/nologin pubky-tls-proxy
-sudo mkdir -p /etc/pubky-tls-proxy
-sudo chown root:pubky-tls-proxy /etc/pubky-tls-proxy
-sudo chmod 750 /etc/pubky-tls-proxy
+mkdir -p ~/.pubky-tls-proxy
 ```
-
 
 Open the config file:
 
 ```bash
-sudo nano /etc/pubky-tls-proxy/config.toml
+nano ~/.pubky-tls-proxy/config.toml
 ```
 
-Paste this and save it. The proxy owns ports 80 and 443. nginx receives decrypted Pubky TLS on port 8080 and regular, still-encrypted HTTPS on port 8443 (after step 6).
+Paste this and save it. The proxy owns ports 80 and 443. nginx receives decrypted Pubky TLS on port 8080 and regular, still-encrypted HTTPS on port 8443 (after step 6). The proxy uses `secret` and `pkarr-packet.cache` beside this file by default.
 
 ```toml
-secret_file = "/var/lib/pubky-tls-proxy/secret"
 listen_addrs = ["0.0.0.0:80", "0.0.0.0:443"]
 http_backend_addr = "127.0.0.1:8080"
 https_backend_addr = "127.0.0.1:8443"
 # Leave plain HTTP enabled (the default) for redirects and Let's Encrypt challenges.
-
-[republish]
-cache_file = "/var/lib/pubky-tls-proxy/pkarr-packet.cache"
 
 [pkarr]
 records_file = "dns-records.toml"
@@ -144,7 +136,7 @@ records_file = "dns-records.toml"
 Create the DNS records file next to the config. The `records_file` setting makes this file required:
 
 ```bash
-sudo nano /etc/pubky-tls-proxy/dns-records.toml
+nano ~/.pubky-tls-proxy/dns-records.toml
 ```
 
 Replace `203.0.113.10` with your server's public IPv4 address and save:
@@ -165,17 +157,22 @@ port = 443
 
 `@` means your proxy's public key. In the HTTPS record, `target = "."` uses that same host, and `port = 443` tells clients to use the shared public port. Use 443 here, not nginx's internal port 8443.
 
-Make both config files readable by the service user, then validate them as that user:
+Validate the files as your normal user, without `sudo`:
 
 ```bash
-sudo chown root:pubky-tls-proxy /etc/pubky-tls-proxy/config.toml /etc/pubky-tls-proxy/dns-records.toml
-sudo chmod 640 /etc/pubky-tls-proxy/config.toml /etc/pubky-tls-proxy/dns-records.toml
-sudo -u pubky-tls-proxy /usr/local/bin/pubky-tls-proxy --config /etc/pubky-tls-proxy/config.toml --check
+pubky-tls-proxy --check
 ```
 
 Look for `Configuration and DNS records are valid`. On first setup, the check also reports that the secret is missing and will be generated at startup. On later checks, it validates the saved secret too. The check runs offline and creates no secret; starting the service generates the identity and publishes the records.
 
 ## 5. Start the proxy
+
+Find your username and absolute home directory path:
+
+```bash
+whoami
+printenv HOME
+```
 
 Open the systemd service file:
 
@@ -183,30 +180,21 @@ Open the systemd service file:
 sudo nano /etc/systemd/system/pubky-tls-proxy.service
 ```
 
-Paste the following and save. Unlike the own-port setup, this service needs permission to bind ports **below 1024**:
+Paste the following, replacing `alice` with your username and `/home/alice` with the home path printed above. Use the full path in `ExecStart`, not `~`. The service starts at boot and runs as your user, even when you are logged out. `AmbientCapabilities` lets it bind ports **80 and 443** without running as root:
 
 ```ini
 [Unit]
-Description=pubky-tls-proxy - routes Pubky TLS, HTTPS and HTTP to a web server
-Documentation=https://github.com/pubky/pubky-tls-proxy
+Description=Pubky TLS Proxy
 After=network-online.target nginx.service
 Wants=network-online.target
 
 [Service]
-User=pubky-tls-proxy
-Group=pubky-tls-proxy
-ExecStart=/usr/local/bin/pubky-tls-proxy --config /etc/pubky-tls-proxy/config.toml
+User=alice
+ExecStart=/usr/local/bin/pubky-tls-proxy --config /home/alice/.pubky-tls-proxy/config.toml
 Restart=on-failure
 RestartSec=5s
 
 AmbientCapabilities=CAP_NET_BIND_SERVICE
-CapabilityBoundingSet=CAP_NET_BIND_SERVICE
-NoNewPrivileges=true
-ProtectSystem=strict
-ProtectHome=true
-PrivateTmp=true
-StateDirectory=pubky-tls-proxy
-StateDirectoryMode=0700
 
 [Install]
 WantedBy=multi-user.target
@@ -222,7 +210,7 @@ sudo journalctl -u pubky-tls-proxy -n 30 --no-pager
 
 Look for your public key, `Listening on 0.0.0.0:80`, and `Listening on 0.0.0.0:443`. For DNS publishing, look for `Managing 2 pkarr DNS records from ...`, followed by `Published local pkarr packet to DHT` or `Published local pkarr packet to relays`. Publishing may take a little while; check the log again if needed.
 
-systemd creates `/var/lib/pubky-tls-proxy` for the secret and packet cache. The generated secret is stored at `/var/lib/pubky-tls-proxy/secret`, readable only by the service user and root. Back it up securely after the first successful start: losing it changes your Pubky identity. Keep using the same file across updates.
+The proxy creates `~/.pubky-tls-proxy/secret` with owner-only permissions on first startup. Back it up securely after the first successful start: losing it changes your Pubky identity. Keep using the same directory across updates.
 
 ## 6. Get the certificate and enable browser HTTPS
 
@@ -318,7 +306,7 @@ Keep the `/.well-known/acme-challenge/` block in the second server block, so cer
 
 ## Update your Pubky address
 
-If the server's public IP changes, edit `/etc/pubky-tls-proxy/dns-records.toml` and save it. The proxy checks the file every three seconds and publishes valid changes automatically; no restart is needed. It also republishes the records every hour to keep them available.
+If the server's public IP changes, edit `~/.pubky-tls-proxy/dns-records.toml` and save it. The proxy checks the file every three seconds and publishes valid changes automatically; no restart is needed. It also republishes the records every hour to keep them available.
 
 If an edit is invalid, the proxy logs the error and keeps the last valid records until you fix the file. Clients may keep using old records until their TTL expires (300 seconds by default). Changes to `config.toml`, such as a new listen port, require a service restart.
 
@@ -326,7 +314,7 @@ If an edit is invalid, the proxy logs the error and keeps the last valid records
 
 - **The proxy can't bind port 80 or 443:** Something else uses it, often nginx's default site. Run `sudo ss -tlnp` and check that no nginx site listens on a public port.
 - **Pubky clients can't connect:** Check the A address and `port = 443` in `dns-records.toml`; clients may cache an old value until its TTL expires.
-- **DNS file errors:** Check that `/etc/pubky-tls-proxy/dns-records.toml` exists, is readable by the service user, and passes the `--check` command in step 4. Keep `records_file = "dns-records.toml"` under `[pkarr]` and publishing enabled under `[republish]`.
+- **DNS file errors:** Check that `~/.pubky-tls-proxy/dns-records.toml` exists and passes `pubky-tls-proxy --check` as your normal user. Keep `records_file = "dns-records.toml"` under `[pkarr]`. If you have changed publishing settings, make sure publishing is still enabled.
 - **DHT errors, but publishing to relays succeeds:** If your network blocks DHT (UDP), add `bootstrap_nodes = []` to the existing `[pkarr]` section in `config.toml`. Restart the proxy. The relays publish to the DHT for you.
 - **`502 Bad Gateway`:** nginx must listen on `127.0.0.1:8080`. Check `sudo nginx -t` and `sudo systemctl status nginx`.
 - **Browser HTTPS disconnects:** Check that nginx listens on `127.0.0.1:8443` with `ssl proxy_protocol` and that the proxy config names it as `https_backend_addr`.
