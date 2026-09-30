@@ -1,7 +1,7 @@
 //! Publishes DNS records in local-records mode or republishes a PKARR packet in external-packet mode.
 //!
 //! DHT nodes and relays drop packets after a while unless they are published again.
-//! Without a DNS records file, the republisher resolves the most recent PKARR packet and
+//! Without a DNS records file, the publisher resolves the most recent PKARR packet and
 //! republishes it unchanged. With a DNS records file, it signs the complete local record
 //! set and publishes valid edits promptly.
 
@@ -332,38 +332,39 @@ async fn publish(network: &PkarrNetwork, packet: &SignedPacket) -> PublishResult
     }
 }
 
-/// Republishes the packet of a public key in the background: right after start, then every
-/// `interval`, until [`Republisher::shutdown`].
-pub struct Republisher {
+/// Publishes local DNS records or republishes an external PKARR packet in the background
+/// until [`PkarrPublisher::shutdown`]. Both modes periodically republish the packet.
+pub struct PkarrPublisher {
     task: JoinHandle<()>,
     shutdown_tx: watch::Sender<bool>,
 }
 
-impl Republisher {
-    pub fn start(
+impl PkarrPublisher {
+    /// Resolves and republishes an external PKARR packet at startup and each republish interval.
+    pub fn start_external_packet(
         public_key: PublicKey,
         networks: Vec<PkarrNetwork>,
         cache: PacketCache,
-        interval: Duration,
+        republish_interval: Duration,
     ) -> Self {
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
         let task = tokio::spawn(republish_periodically(
             public_key,
             networks,
             cache,
-            interval,
+            republish_interval,
             shutdown_rx,
         ));
         Self { task, shutdown_tx }
     }
 
     /// Publishes the file's complete record set and checks for changes every three seconds.
-    pub fn start_local(
+    pub fn start_local_records(
         keypair: Keypair,
         networks: Vec<PkarrNetwork>,
         cache: PacketCache,
-        interval: Duration,
-        path: PathBuf,
+        republish_interval: Duration,
+        dns_records_file: PathBuf,
         records: DnsRecords,
     ) -> Self {
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
@@ -371,15 +372,15 @@ impl Republisher {
             keypair,
             networks,
             cache,
-            interval,
-            path,
+            republish_interval,
+            dns_records_file,
             records,
             shutdown_rx,
         ));
         Self { task, shutdown_tx }
     }
 
-    /// Stops republishing, also in the middle of a run.
+    /// Stops publishing and republishing, also in the middle of a run.
     ///
     /// # Errors
     ///
@@ -391,8 +392,8 @@ impl Republisher {
         let timeout = timeout.unwrap_or(Duration::from_secs(10));
         tokio::time::timeout(timeout, self.task)
             .await
-            .with_context(|| format!("Republisher shutdown timed out after {timeout:?}"))?
-            .context("Republisher task failed")
+            .with_context(|| format!("PKARR publisher shutdown timed out after {timeout:?}"))?
+            .context("PKARR publisher task failed")
     }
 }
 
@@ -402,7 +403,7 @@ async fn publish_local_periodically(
     keypair: Keypair,
     networks: Vec<PkarrNetwork>,
     cache: PacketCache,
-    interval: Duration,
+    republish_interval: Duration,
     path: PathBuf,
     mut records: DnsRecords,
     mut shutdown: watch::Receiver<bool>,
@@ -421,7 +422,7 @@ async fn publish_local_periodically(
     let mut pending = true;
     let mut last_publish = tokio::time::Instant::now();
     loop {
-        if pending || last_publish.elapsed() >= interval {
+        if pending || last_publish.elapsed() >= republish_interval {
             // Publishing to the networks is independent; retries on one never block the other.
             let changed = {
                 let publication = publish_local(&keypair, &networks, &cache, &records, &mut packet);
@@ -472,7 +473,7 @@ async fn publish_local_periodically(
                     }
                 }
             }
-            _ = tokio::time::sleep_until(last_publish + interval) => {}
+            _ = tokio::time::sleep_until(last_publish + republish_interval) => {}
             _ = shutdown.changed() => break,
         }
     }
@@ -555,7 +556,7 @@ async fn republish_periodically(
     public_key: PublicKey,
     networks: Vec<PkarrNetwork>,
     cache: PacketCache,
-    interval: Duration,
+    republish_interval: Duration,
     mut shutdown_rx: watch::Receiver<bool>,
 ) {
     loop {
@@ -568,7 +569,7 @@ async fn republish_periodically(
             _ = shutdown_rx.changed() => break,
         }
         tokio::select! {
-            _ = tokio::time::sleep(interval) => {}
+            _ = tokio::time::sleep(republish_interval) => {}
             _ = shutdown_rx.changed() => break,
         }
     }
@@ -917,7 +918,7 @@ mod tests {
         fs::write(&path, "[[records]]\nname='@'\ntype='A'\naddress='203.0.113.10'\n[[records]]\nname='_old'\ntype='TXT'\ntext='old'").unwrap();
         let records = DnsRecords::load(&path).unwrap();
         let cache = PacketCache::new(dir.path().join("cache"), keypair.public_key());
-        let publisher = Republisher::start_local(
+        let publisher = PkarrPublisher::start_local_records(
             keypair.clone(),
             vec![dht.network()],
             cache,
@@ -1016,7 +1017,7 @@ mod tests {
         .unwrap();
         let records = DnsRecords::load(&path).unwrap();
         let cache = PacketCache::new(dir.path().join("cache"), keypair.public_key());
-        let publisher = Republisher::start_local(
+        let publisher = PkarrPublisher::start_local_records(
             keypair.clone(),
             vec![dht.network()],
             cache,
@@ -1075,7 +1076,7 @@ mod tests {
         .unwrap();
         let records = DnsRecords::load(&path).unwrap();
         let cache = PacketCache::new(dir.path().join("cache"), keypair.public_key());
-        let publisher = Republisher::start_local(
+        let publisher = PkarrPublisher::start_local_records(
             keypair.clone(),
             vec![unreachable_relay()],
             cache,

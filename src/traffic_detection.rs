@@ -3,7 +3,7 @@
 //! - Anything that doesn't start with a TLS handshake record is treated as plain HTTP.
 //! - A TLS ClientHello that offers raw public keys ([RFC 7250]) as server certificate type
 //!   is routed to the raw public key TLS acceptor, regardless of the client application.
-//! - Every other TLS connection is routed to the HTTPS backend using TLS passthrough.
+//! - Every other TLS connection is routed to the TLS passthrough backend.
 //!
 //! [RFC 7250]: https://datatracker.ietf.org/doc/html/rfc7250
 
@@ -15,7 +15,7 @@ use tokio::io::{AsyncRead, AsyncReadExt};
 const TLS_HANDSHAKE_RECORD_TYPE: u8 = 0x16;
 
 /// Upper bound for buffering a ClientHello. Real ClientHellos are a few KiB at most, even
-/// with post-quantum key shares. Anything bigger is handed to the HTTPS backend unparsed.
+/// with post-quantum key shares. Anything bigger is handed to the TLS passthrough backend unparsed.
 const MAX_CLIENT_HELLO_BYTES: usize = 64 * 1024;
 
 const READ_CHUNK_BYTES: usize = 4096;
@@ -42,7 +42,7 @@ pub struct DetectedTraffic {
 ///
 /// Plain HTTP is recognised after the first read. For TLS, this reads until the complete
 /// ClientHello has been received. A ClientHello that rustls can't parse is classified as
-/// TLS passthrough so that the HTTPS backend can decide how to handle it.
+/// TLS passthrough so that the TLS passthrough backend can decide how to handle it.
 ///
 /// This waits for the client indefinitely; callers should apply a timeout.
 ///

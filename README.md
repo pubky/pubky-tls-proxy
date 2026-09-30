@@ -23,9 +23,10 @@ stays the same.
 
 ## Getting started
 
-Download a binary for your platform from the
-[latest release](https://github.com/pubky/pubky-tls-proxy/releases/latest/), then choose
-a setup guide:
+The guides in this checkout use the unreleased configuration schema and explain how
+to install a binary built from the same revision. For a prebuilt binary, use the
+[latest release](https://github.com/pubky/pubky-tls-proxy/releases/latest/) and the
+documentation at its matching tag. Choose a setup guide:
 
 - [Use a separate port for raw public key TLS](docs/guides/nginx-letsencrypt.md) (recommended).
   This Ubuntu and Debian guide leaves nginx on ports 80 and 443 and runs the proxy on
@@ -38,7 +39,7 @@ You will need:
 
 - A web server or HTTP service for the proxy to forward requests to.
 - A secret key. The proxy generates one on first startup at
-  `~/.pubky-tls-proxy/secret`, or you can supply an existing key with `--secret-file`.
+  `~/.pubky-tls-proxy/secret`, or you can supply an existing key with `--secret-key-file`.
 - The proxy creates a commented `~/.pubky-tls-proxy/config.toml` on first startup.
   Edit it to customize the defaults; subsequent starts leave it alone.
 - For automatic publishing, a `dns-records.toml` file beside your config with an
@@ -55,10 +56,10 @@ is the server behind the proxy that handles the request.
 |------------------|---------------------|-------------|
 | Raw public key TLS | Handles TLS using your secret key and forwards decrypted HTTP | HTTP backend |
 | Plain HTTP | Forwards the HTTP traffic | HTTP backend |
-| Certificate-based HTTPS | Passes the encrypted traffic through; the backend handles TLS | HTTPS backend |
+| Certificate-based HTTPS | Passes the encrypted traffic through; the backend handles TLS | TLS passthrough backend |
 
 You can disable incoming plain HTTP with `--no-plain-http`. Certificate-based HTTPS connections
-are closed unless you configure an HTTPS backend. See the
+are closed unless you configure a TLS passthrough backend. See the
 [configuration reference](docs/configuration.md) for backend addresses and other settings.
 
 By default, the proxy sends the client's address to each backend using a
@@ -77,6 +78,7 @@ can complete their TLS handshake.
 ## Documentation
 
 - [Terminology](docs/terminology.md): domains, keys, connection types, and PKARR publishing.
+- [Configuration migration](docs/configuration-migration.md): renamed CLI options and configuration keys.
 - [Configuration](docs/configuration.md): command-line options, config files,
   connection limits, packet republishing, and logging.
 - [Changelog](CHANGELOG.md): changes in each release.

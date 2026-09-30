@@ -1,12 +1,12 @@
 //! The proxy: accepts connections on all listen addresses and routes each one by its traffic kind.
 //!
-//! | Incoming traffic        | Handling                                    | Backend              |
-//! |-------------------------|---------------------------------------------|----------------------|
-//! | Plain HTTP              | forwarded as is, or rejected if disabled     | `http_backend_addr`  |
-//! | Raw public key TLS      | TLS terminated with the proxy's keypair      | `http_backend_addr`  |
-//! | Certificate-based HTTPS | forwarded as is, the backend terminates TLS  | `https_backend_addr` |
+//! | Incoming traffic        | Handling                                    | Backend                        |
+//! |-------------------------|---------------------------------------------|--------------------------------|
+//! | Plain HTTP              | forwarded as is, or rejected if disabled     | `http_backend_addr`            |
+//! | Raw public key TLS      | TLS terminated with the proxy's keypair      | `http_backend_addr`            |
+//! | Certificate-based HTTPS | forwarded as is, the backend terminates TLS  | `tls_passthrough_backend_addr` |
 //!
-//! Unparseable TLS handshakes also use the TLS passthrough route to the HTTPS backend.
+//! Unparseable TLS handshakes also use the TLS passthrough backend.
 
 use crate::{
     forwarding::{self, Backend, ConnectionAddrs},
@@ -32,8 +32,8 @@ const ACCEPT_ERROR_BACKOFF: Duration = Duration::from_millis(100);
 #[derive(Debug, Clone, Copy)]
 pub struct ConnectionLimits {
     pub max_connections: usize,
-    pub handshake_timeout: Duration,
-    pub backend_timeout: Duration,
+    pub rpk_handshake_timeout: Duration,
+    pub backend_setup_timeout: Duration,
     pub idle_timeout: Duration,
 }
 
@@ -41,8 +41,8 @@ impl Default for ConnectionLimits {
     fn default() -> Self {
         Self {
             max_connections: 1024,
-            handshake_timeout: Duration::from_secs(10),
-            backend_timeout: Duration::from_secs(10),
+            rpk_handshake_timeout: Duration::from_secs(10),
+            backend_setup_timeout: Duration::from_secs(10),
             idle_timeout: Duration::from_secs(5 * 60),
         }
     }
@@ -56,7 +56,7 @@ pub struct ProxyConfig {
     /// Receives plain HTTP and decrypted raw public key TLS traffic.
     pub http_backend_addr: SocketAddr,
     /// Receives TLS passthrough traffic. Without it, those connections are closed.
-    pub https_backend_addr: Option<SocketAddr>,
+    pub tls_passthrough_backend_addr: Option<SocketAddr>,
     /// Whether incoming plain HTTP is forwarded to the HTTP backend.
     pub plain_http: bool,
     /// Whether backend connections start with a PROXY protocol v1 header.
@@ -68,7 +68,7 @@ pub struct ProxyConfig {
 struct Routes {
     raw_public_key_tls_acceptor: TlsAcceptor,
     http_backend: Backend,
-    https_backend: Option<Backend>,
+    tls_passthrough_backend: Option<Backend>,
     plain_http: bool,
 }
 
@@ -94,12 +94,12 @@ impl Proxy {
             Semaphore::MAX_PERMITS
         );
         anyhow::ensure!(
-            !config.limits.handshake_timeout.is_zero(),
-            "handshake_timeout must be positive"
+            !config.limits.rpk_handshake_timeout.is_zero(),
+            "rpk_handshake_timeout must be positive"
         );
         anyhow::ensure!(
-            !config.limits.backend_timeout.is_zero(),
-            "backend_timeout must be positive"
+            !config.limits.backend_setup_timeout.is_zero(),
+            "backend_setup_timeout must be positive"
         );
         anyhow::ensure!(
             !config.limits.idle_timeout.is_zero(),
@@ -127,7 +127,7 @@ impl Proxy {
                 addr: config.http_backend_addr,
                 send_proxy_protocol: config.send_proxy_protocol,
             },
-            https_backend: config.https_backend_addr.map(|addr| Backend {
+            tls_passthrough_backend: config.tls_passthrough_backend_addr.map(|addr| Backend {
                 addr,
                 send_proxy_protocol: config.send_proxy_protocol,
             }),
@@ -314,12 +314,12 @@ async fn handle_connection(
             .await
         }
         IncomingTraffic::TlsPassthrough => {
-            let Some(https_backend) = routes.https_backend else {
-                debug!("{client_addr}: TLS passthrough rejected, no HTTPS backend configured");
+            let Some(backend) = routes.tls_passthrough_backend else {
+                debug!("{client_addr}: TLS passthrough rejected, no TLS passthrough backend configured");
                 return Ok(());
             };
-            info!("{client_addr}: TLS passthrough -> {}", https_backend.addr);
-            forwarding::forward_tls_passthrough(client, https_backend, addrs, limits).await
+            info!("{client_addr}: TLS passthrough -> {}", backend.addr);
+            forwarding::forward_tls_passthrough(client, backend, addrs, limits).await
         }
     }
 }

@@ -119,26 +119,22 @@ Enter your email address, accept the terms, and choose to redirect HTTP to HTTPS
 
 ## 4. Install Pubky TLS Proxy
 
-Download the prebuilt binary from the [releases page](https://github.com/pubky/pubky-tls-proxy/releases). This guide targets **v0.3.4**, which includes publishing DNS records from a local file.
+This guide uses the **unreleased configuration schema**. Build from the same source
+revision as this guide using a stable Rust toolchain. The published v0.3.4 binary
+does not accept the new names; its matching guide is available
+[here](https://github.com/pubky/pubky-tls-proxy/blob/v0.3.4/docs/guides/nginx-letsencrypt.md).
 
-The commands below use **linux-amd64**. For a 64-bit ARM server, choose the matching archive on the releases page and replace the platform in the commands.
-
-```bash
-mkdir -p ~/pubky-tls-proxy-download
-cd ~/pubky-tls-proxy-download
-curl -fLO https://github.com/pubky/pubky-tls-proxy/releases/download/v0.3.4/pubky-tls-proxy-linux-amd64-v0.3.4.tar.gz
-curl -fLO https://github.com/pubky/pubky-tls-proxy/releases/download/v0.3.4/SHA256SUMS
-sha256sum --ignore-missing -c SHA256SUMS
-```
-
-The checksum must print `OK`. Extract and install the binary:
+From your repository checkout on the server:
 
 ```bash
-tar -xzf pubky-tls-proxy-linux-amd64-v0.3.4.tar.gz
-sudo cp pubky-tls-proxy-linux-amd64-v0.3.4/pubky-tls-proxy /usr/local/bin/pubky-tls-proxy
+cargo build --release
+sudo cp target/release/pubky-tls-proxy /usr/local/bin/pubky-tls-proxy
 sudo chmod 755 /usr/local/bin/pubky-tls-proxy
 pubky-tls-proxy --version
 ```
+
+For an existing installation, first update its configuration using the
+[migration guide](../configuration-migration.md).
 
 ## 5. Configure the proxy
 
@@ -162,14 +158,14 @@ http_backend_addr = "127.0.0.1:8080"
 plain_http = false
 
 [pkarr]
-records_file = "dns-records.toml"
+dns_records_file = "dns-records.toml"
 ```
 
 For other options, see [Configuration](../configuration.md).
 
 ### Publish DNS records for your Public Key Domain
 
-Create the DNS records file next to the config. The `records_file` setting makes this file required:
+Create the DNS records file next to the config. The `dns_records_file` setting makes this file required:
 
 ```bash
 nano ~/.pubky-tls-proxy/dns-records.toml
@@ -242,7 +238,7 @@ sudo systemctl enable --now pubky-tls-proxy
 sudo journalctl -u pubky-tls-proxy -n 30 --no-pager
 ```
 
-Look for your public key, `Listening on 0.0.0.0:8443`, and `Plain HTTP -> rejected`. For DNS publishing, look for `Managing 2 DNS records from ...`, followed by `Published local PKARR packet to DHT` or `Published local PKARR packet to relays`. Publishing may take a little while; check the log again if needed. `Certificate-based HTTPS -> rejected, no HTTPS backend configured` is expected: certificate-based HTTPS connects directly to nginx, not to this proxy.
+Look for your public key, `Listening on 0.0.0.0:8443`, and `Plain HTTP -> rejected`. For DNS publishing, look for `Managing 2 DNS records from ...`, followed by `Published local PKARR packet to DHT` or `Published local PKARR packet to relays`. Publishing may take a little while; check the log again if needed. `TLS passthrough -> rejected, no TLS passthrough backend configured` is expected: certificate-based HTTPS connects directly to nginx, not to this proxy.
 
 The proxy creates `~/.pubky-tls-proxy/secret` with owner-only permissions on first startup. Back it up securely after the first successful start to retain control of your Public Key Domain. Generating a replacement key creates a different Public Key Domain. Keep using the same directory across updates.
 
@@ -291,8 +287,8 @@ If an edit is invalid, the proxy logs the error and keeps the last valid records
 
 - **Raw public key TLS connections fail:** Check that TCP port 8443 is open to your users (for a public site, source range `0.0.0.0/0`). From another machine, run `nc -vz -w 5 example.com 8443`. A timeout usually means a firewall is dropping traffic.
 - **Your Public Key Domain leads to the wrong port:** Set `port = 8443` in `dns-records.toml`; clients may cache the old value until its TTL expires.
-- **DNS records file errors:** Check that `~/.pubky-tls-proxy/dns-records.toml` exists and passes `pubky-tls-proxy --check` as your normal user. Keep `records_file = "dns-records.toml"` under `[pkarr]`. If you have changed publishing settings, make sure publishing is still enabled.
-- **DHT errors, but publishing to relays succeeds:** If your network blocks DHT (UDP), add `bootstrap_nodes = []` to the existing `[pkarr]` section in `config.toml`. Restart the proxy; the relays publish to the DHT on your behalf.
+- **DNS records file errors:** Check that `~/.pubky-tls-proxy/dns-records.toml` exists and passes `pubky-tls-proxy --check` as your normal user. Keep `dns_records_file = "dns-records.toml"` under `[pkarr]`. If you have changed publishing settings, make sure publishing is still enabled.
+- **DHT errors, but publishing to relays succeeds:** If your network blocks DHT (UDP), add `dht_bootstrap_nodes = []` to the existing `[pkarr]` section in `config.toml`. Restart the proxy; the relays publish to the DHT on your behalf.
 - **`502 Bad Gateway` over raw public key TLS:** Check `sudo systemctl status nginx` and `sudo nginx -t`. nginx must listen on `127.0.0.1:8080` with `proxy_protocol` enabled.
 - **certbot fails:** Confirm the domain's A record points to this server and port 80 is open. Test `curl -I http://example.com`.
 

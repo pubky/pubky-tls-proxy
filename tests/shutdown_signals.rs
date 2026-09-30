@@ -25,7 +25,7 @@ async fn assert_signal_runs_shutdown(signal: &str) -> Result<()> {
     std::fs::write(directory.path().join("secret"), "01".repeat(32))?;
     std::fs::write(
         &config,
-        "secret_file = 'secret'\nlisten_addrs = ['127.0.0.1:0']\n[republish]\nenabled = false\n",
+        "secret_key_file = 'secret'\nlisten_addrs = ['127.0.0.1:0']\n[pkarr]\npublish = false\n",
     )?;
     let mut child = Command::new(env!("CARGO_BIN_EXE_pubky-tls-proxy"))
         .arg("--config")

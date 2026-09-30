@@ -7,6 +7,12 @@ All notable changes are documented here. The format is based on
 ## [Unreleased]
 
 ### Changed
+- **Breaking:** Rename CLI options and TOML keys for secret keys, TLS passthrough,
+  connection timeouts, and PKARR publishing. Consolidate publishing settings under
+  `[pkarr]`, remove `[republish]` and the `--backend-addr` alias, and reject old names.
+  See the [configuration migration guide](docs/configuration-migration.md).
+- Rename the publishing subsystem to `PkarrPublisher`, with explicit local-records
+  and external-packet constructors and settings matching the new configuration names.
 - Standardize terminology across documentation, CLI help, configuration comments,
   logs, and internal names: Public Key Domain, raw public key TLS,
   certificate-based HTTPS, secret key, and PKARR packet. Add a terminology reference.

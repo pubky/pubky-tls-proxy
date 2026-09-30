@@ -195,13 +195,13 @@ async fn disabled_plain_http_is_closed_without_contacting_backend() -> Result<()
 }
 
 #[tokio::test]
-async fn certificate_based_https_is_passed_through_unchanged_to_https_backend() -> Result<()> {
+async fn certificate_based_https_reaches_tls_passthrough_backend_unchanged() -> Result<()> {
     let http_backend = start_http_echo_backend().await?;
     let client_hello = x509_client_hello("example.com");
-    let https_backend = RecordingBackend::start().await?;
+    let tls_passthrough_backend = RecordingBackend::start().await?;
     let proxy = Proxy::start(ProxyConfig {
         plain_http: false,
-        ..proxy_config(http_backend, Some(https_backend.addr()?), true)
+        ..proxy_config(http_backend, Some(tls_passthrough_backend.addr()?), true)
     })
     .await?;
 
@@ -216,7 +216,9 @@ async fn certificate_based_https_is_passed_through_unchanged_to_https_backend() 
     let mut expected_bytes = expected_proxy_header.into_bytes();
     expected_bytes.extend_from_slice(&client_hello);
     assert_eq!(
-        https_backend.receive(expected_bytes.len()).await?,
+        tls_passthrough_backend
+            .receive(expected_bytes.len())
+            .await?,
         expected_bytes
     );
 
@@ -234,7 +236,7 @@ async fn client_hanging_up_before_sending_anything_is_not_a_failure() -> Result<
             addr: unused_localhost_addr(),
             send_proxy_protocol: true,
         },
-        https_backend: None,
+        tls_passthrough_backend: None,
         plain_http: true,
     };
     let listener = TcpListener::bind(localhost_any_port()).await?;
@@ -255,7 +257,7 @@ async fn client_hanging_up_before_sending_anything_is_not_a_failure() -> Result<
 }
 
 #[tokio::test]
-async fn certificate_based_https_without_https_backend_is_closed() -> Result<()> {
+async fn certificate_based_https_without_tls_passthrough_backend_is_closed() -> Result<()> {
     let http_backend = start_http_echo_backend().await?;
     let proxy = start_proxy(http_backend, None, true).await?;
 
@@ -275,7 +277,7 @@ async fn stalled_raw_public_key_tls_handshake_releases_its_connection_slot() -> 
     let proxy = Proxy::start(ProxyConfig {
         limits: ConnectionLimits {
             max_connections: 1,
-            handshake_timeout: Duration::from_millis(100),
+            rpk_handshake_timeout: Duration::from_millis(100),
             ..ConnectionLimits::default()
         },
         ..proxy_config(backend, None, false)
@@ -412,14 +414,14 @@ async fn raw_public_key_tls_with_backend_down_gets_bad_gateway() -> Result<()> {
 
 fn proxy_config(
     http_backend_addr: SocketAddr,
-    https_backend_addr: Option<SocketAddr>,
+    tls_passthrough_backend_addr: Option<SocketAddr>,
     send_proxy_protocol: bool,
 ) -> ProxyConfig {
     ProxyConfig {
         keypair: Keypair::random(),
         listen_addrs: vec![localhost_any_port()],
         http_backend_addr,
-        https_backend_addr,
+        tls_passthrough_backend_addr,
         plain_http: true,
         send_proxy_protocol,
         limits: ConnectionLimits::default(),
@@ -428,12 +430,12 @@ fn proxy_config(
 
 async fn start_proxy(
     http_backend_addr: SocketAddr,
-    https_backend_addr: Option<SocketAddr>,
+    tls_passthrough_backend_addr: Option<SocketAddr>,
     send_proxy_protocol: bool,
 ) -> Result<Proxy> {
     Proxy::start(proxy_config(
         http_backend_addr,
-        https_backend_addr,
+        tls_passthrough_backend_addr,
         send_proxy_protocol,
     ))
     .await
