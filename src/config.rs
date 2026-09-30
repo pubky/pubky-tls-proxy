@@ -295,6 +295,44 @@ fn read_config_file(path: &Path) -> Result<FileConfig> {
     toml::from_str(&content).with_context(|| format!("Invalid config file {path:?}"))
 }
 
+/// Existing configuration determines where init fills in missing files. No network I/O
+/// or file creation occurs here; relative paths retain normal startup semantics.
+pub fn init_file_paths(config_path: &Path) -> Result<(PathBuf, PathBuf)> {
+    let file = match fs::symlink_metadata(config_path) {
+        Ok(_) => read_config_file(config_path)?,
+        Err(error) if error.kind() == ErrorKind::NotFound => FileConfig::default(),
+        Err(error) => return Err(error).context("Failed to inspect config file"),
+    };
+    connection_limits(&Args::default(), &file)?;
+    ensure!(
+        file.listen_addrs
+            .as_ref()
+            .is_none_or(|addrs| !addrs.is_empty()),
+        "listen_addrs must not be empty"
+    );
+    if file.pkarr.publish.unwrap_or(true) {
+        // Reuse offline check validation, without requiring the records file yet.
+        let location = ConfigLocation {
+            file: Some(config_path.to_path_buf()),
+            base_dir: config_path.parent().map(Path::to_path_buf),
+        };
+        let check_args = Args {
+            check: true,
+            ..Args::default()
+        };
+        pkarr_publish_settings(&check_args, &file, &location, None)?;
+    }
+    let parent = config_path.parent().unwrap_or(Path::new("."));
+    Ok((
+        parent.join(file.secret_key_file.unwrap_or_else(|| "secret".into())),
+        parent.join(
+            file.pkarr
+                .dns_records_file
+                .unwrap_or_else(|| DEFAULT_DNS_RECORDS_FILE.into()),
+        ),
+    ))
+}
+
 fn pkarr_publish_settings(
     args: &Args,
     file: &FileConfig,

@@ -107,6 +107,14 @@ For an existing installation, first update its configuration using the
 
 ## 4. Configure the proxy
 
+With the upcoming release that includes `init`, you can run
+`pubky-tls-proxy init --port 443` as your normal user to prepare the directory,
+secret key, and A + HTTPS records. Review the suggested IP and select public port
+`443`, not nginx's internal `8443`. Nothing is published by setup. Then configure
+the listeners and backends below and review the generated records instead of
+creating them manually. The v0.4.0 binary installed above uses the manual steps.
+See [initialization](../configuration.md#initialization).
+
 Run the proxy as your normal login user. Keep its configuration, secret key file, and packet cache together in `~/.pubky-tls-proxy/`. Create the directory without `sudo`:
 
 ```bash

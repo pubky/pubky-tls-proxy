@@ -6,6 +6,12 @@ All notable changes are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+- Add interactive `init` to prepare configuration, a secret key, and A + HTTPS DNS
+  records for review without starting listeners or publishing. Public IPv4 detection
+  is a suggestion only; unattended setup requires an explicit `--public-ip`.
+  Existing files are validated and preserved, and partial setup can be resumed.
+
 ## [0.4.0] - 2026-09-30
 
 ### Changed

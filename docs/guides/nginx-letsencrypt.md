@@ -145,6 +145,13 @@ For an existing installation, first update its configuration using the
 
 ## 5. Configure the proxy
 
+With the upcoming release that includes `init`, you can run `pubky-tls-proxy init`
+as your normal user to prepare the directory, secret key, and A + HTTPS records.
+Review the suggested IP and keep the public port at `8443`. Nothing is published
+by setup. Then configure the backend below and review the generated records instead
+of creating them manually. The v0.4.0 binary installed above uses the manual steps.
+See [initialization](../configuration.md#initialization).
+
 This guide runs the proxy as your normal login user. You may want to create a dedicated user in production environments.
 Keep its configuration, secret key file, and packet cache together in `~/.pubky-tls-proxy/`. Create the directory without `sudo`:
 

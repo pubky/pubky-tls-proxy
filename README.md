@@ -21,6 +21,20 @@ stays the same.
 
 ## Getting started
 
+With a version that includes `init` (currently unreleased), prepare your files first:
+
+```sh
+pubky-tls-proxy init
+```
+
+The interactive setup suggests your outbound public IPv4 address and asks you to
+review it and the public TLS port (default `8443`) before creating files. It creates
+`config.toml`, `secret`, and `dns-records.toml` in `~/.pubky-tls-proxy/`, preserving
+existing files. **Nothing is published until you start the proxy.** Review the files
+and configure your backend before starting. Behind NAT or a load balancer, use the
+address clients connect to and arrange inbound routing to the advertised port.
+See [initialization](docs/configuration.md#initialization) for unattended setup.
+
 Download a binary for your platform from the
 [latest release](https://github.com/pubky/pubky-tls-proxy/releases/latest/), then choose
 a setup guide.

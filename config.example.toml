@@ -51,6 +51,8 @@
 # ---------------------------
 # To publish records directly, create dns-records.toml beside this file with an
 # A record for your public address and an HTTPS record for the proxy's port.
+# `pubky-tls-proxy init` can prepare these records without publishing them.
+# Review the public address and port before starting the proxy.
 # The proxy publishes valid edits automatically. Without that file, it
 # republishes an externally published PKARR packet unchanged (external-packet mode).
 # Leave this on unless another service handles publishing.

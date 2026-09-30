@@ -3,7 +3,7 @@
 //! Every setting can also come from the config file (see `config.rs`). That's why most
 //! arguments are optional here: an absent flag means "use the config file or the default".
 
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use std::{net::SocketAddr, path::PathBuf};
 
 /// A proxy that terminates raw public key TLS with a secret key and routes HTTP(S)
@@ -17,8 +17,11 @@ use std::{net::SocketAddr, path::PathBuf};
 /// arguments override the config file. Relative paths are resolved against the directory
 /// of the config file, both in the file and on the command line.
 #[derive(Parser, Debug, Default)]
-#[command(author, version, about)]
+#[command(author, version, about, args_conflicts_with_subcommands = true)]
 pub struct Args {
+    #[command(subcommand)]
+    pub command: Option<Command>,
+
     /// Config file to use instead of ~/.pubky-tls-proxy/config.toml. Must exist.
     #[arg(long, value_name = "FILE")]
     pub config: Option<PathBuf>,
@@ -111,6 +114,12 @@ pub struct Args {
     /// Don't use PKARR relays for publishing or republishing.
     #[arg(long)]
     pub no_pkarr_relays: bool,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum Command {
+    /// Prepare configuration, a secret key and DNS records without starting or publishing.
+    Init(crate::init::InitArgs),
 }
 
 #[cfg(test)]

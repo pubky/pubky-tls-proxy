@@ -18,9 +18,9 @@ toml = "1.1.6"
 url = "2"
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
 tempfile = "3.27.0"
+reqwest = { version = "0.13", features = ["rustls"], default-features = false }
 
 [dev-dependencies]
-reqwest = { version = "0.13", features = ["rustls"], default-features = false }
 portpicker = "0.1.1"
 once_cell = "1.19.0"
 tokio-test = "0.4"

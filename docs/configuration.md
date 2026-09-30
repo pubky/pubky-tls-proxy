@@ -71,6 +71,64 @@ The command line can only switch things off (`--no-...`). If the config file say
 
 To dedicate a listen port to raw public key TLS, set `plain_http = false` and leave `tls_passthrough_backend_addr` unset. In a shared-port setup with HTTP redirects or Let's Encrypt HTTP-01 challenges, keep plain HTTP enabled and handle those requests in the backend.
 
+## Initialization
+
+`init` is available in the next release; the existing manual setup instructions also
+work with v0.4.0.
+
+```sh
+pubky-tls-proxy init
+```
+
+On a terminal, setup asks for a public IPv4 address and public TLS port (default
+`8443`), shows the A + HTTPS records and file paths, then asks for confirmation.
+Before confirmation it creates no directories or files. It prepares `config.toml`,
+`secret`, and `dns-records.toml` in `~/.pubky-tls-proxy/`. It never starts listeners,
+contacts PKARR networks, or publishes records.
+
+Address detection queries `https://api.ipify.org`, with
+`https://ipv4.icanhazip.com` as a fallback, using direct IPv4 HTTPS connections.
+Each request has a three-second timeout, with a six-second overall limit.
+The result is only a suggestion: outbound NAT, CGNAT, and load balancers may use a
+different address from the one clients should connect to. Detection does not test
+inbound reachability. If it fails, enter the address manually. `--public-ip` skips
+detection. Ensure the advertised TCP port reaches the proxy.
+
+For scripts, supply the address explicitly:
+
+```sh
+pubky-tls-proxy init --non-interactive --public-ip YOUR_PUBLIC_IPV4
+# Shared-port deployment:
+pubky-tls-proxy init --non-interactive --public-ip YOUR_PUBLIC_IPV4 --port 443
+# Custom configuration directory:
+pubky-tls-proxy init --directory /path/to/proxy --non-interactive --public-ip YOUR_PUBLIC_IPV4
+```
+
+Replace `YOUR_PUBLIC_IPV4` with a globally routable IPv4 address. Without a terminal,
+use `--non-interactive`; it requires `--public-ip` when DNS records are missing.
+`--port` changes the advertised port, not the listeners in `config.toml`.
+Edit listener and backend settings to match your deployment before starting.
+
+Existing files are validated and never overwritten. If `config.toml` already
+selects custom secret or DNS records paths, setup uses those paths, resolving them
+against the configuration directory. Unlike normal startup, `init` can create a
+missing explicitly selected DNS records file. Rerunning setup fills in missing
+files; `--public-ip` and `--port` do not modify an existing records file. Invalid
+existing files require manual correction. A write failure can leave some files
+created; rerun after fixing the problem.
+
+Review the records, then validate and start:
+
+```sh
+pubky-tls-proxy --check
+pubky-tls-proxy
+```
+
+For a custom directory, pass `--config /path/to/proxy/config.toml` to both commands.
+Normal startup publishes the reviewed file unless publishing is disabled. Changes
+to the address require editing `dns-records.toml`; setup does not implement dynamic
+DNS. Without a records file, startup retains external-packet republishing behavior.
+
 ## Publishing and republishing the PKARR packet
 
 DHT nodes and relays forget PKARR packets after a while unless they are published again. The proxy therefore republishes the PKARR packet for its Public Key Domain: right after startup, then every `republish_interval_secs`.

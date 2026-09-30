@@ -9,6 +9,7 @@ mod cli;
 mod config;
 mod dns_records;
 mod forwarding;
+mod init;
 mod packet_cache;
 mod prefixed_stream;
 mod proxy;
@@ -31,6 +32,9 @@ async fn main() -> Result<()> {
     init_logging();
 
     let args = cli::Args::parse();
+    if let Some(cli::Command::Init(init_args)) = &args.command {
+        return init::run(init_args).await;
+    }
     let check = args.check;
     let settings = Settings::load(args)?;
     let records = settings
