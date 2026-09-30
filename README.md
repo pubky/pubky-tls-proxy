@@ -13,10 +13,6 @@ Pubky uses [raw public key TLS (RFC 7250)](https://datatracker.ietf.org/doc/html
 clients identify the server by its public key rather than a certificate issued by a
 certificate authority. The proxy handles this part so your web server doesn't need to.
 
-These are connection types, not different kinds of applications: a browser or another
-application may support certificate-based TLS, raw public key TLS, or both. Pubky uses
-PKARR to discover the server's address; that discovery is separate from TLS.
-
 A **Public Key Domain** is a domain named by an encoded public key. Its DNS records
 are published through PKARR, so the server's IP address can change while the domain
 stays the same.
@@ -25,8 +21,7 @@ stays the same.
 
 Download a binary for your platform from the
 [latest release](https://github.com/pubky/pubky-tls-proxy/releases/latest/), then choose
-a setup guide. When upgrading from 0.3.x, first follow the
-[configuration migration guide](docs/configuration-migration.md).
+a setup guide.
 
 - [Use a separate port for raw public key TLS](docs/guides/nginx-letsencrypt.md) (recommended).
   This Ubuntu and Debian guide leaves nginx on ports 80 and 443 and runs the proxy on
@@ -38,14 +33,8 @@ a setup guide. When upgrading from 0.3.x, first follow the
 You will need:
 
 - A web server or HTTP service for the proxy to forward requests to.
-- A secret key. The proxy generates one on first startup at
+- (Optionally) a secret key. The proxy generates one on first startup at
   `~/.pubky-tls-proxy/secret`, or you can supply an existing key with `--secret-key-file`.
-- The proxy creates a commented `~/.pubky-tls-proxy/config.toml` on first startup.
-  Edit it to customize the defaults; subsequent starts leave it alone.
-- For automatic publishing, a `dns-records.toml` file beside your config with an
-  `A` record for your public address and an `HTTPS` record for the proxy's port.
-  Alternatively, publish a PKARR packet with another tool and let the proxy republish it.
-  See [DNS records](docs/configuration.md#publishing-dns-records).
 
 ## How it works
 
@@ -70,10 +59,6 @@ configured to accept this header. If it doesn't support the PROXY protocol, use
 With `dns-records.toml`, the proxy publishes changes automatically and republishes
 the PKARR packet every hour. Without the file, it republishes
 the latest PKARR packet from the network (or cached copy) unchanged.
-
-If a backend is unreachable, requests over plain HTTP or raw public key TLS receive a
-`502 Bad Gateway`. Certificate-based HTTPS connections are closed because only the backend
-can complete their TLS handshake.
 
 ## Documentation
 
