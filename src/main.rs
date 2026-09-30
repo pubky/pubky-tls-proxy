@@ -39,9 +39,18 @@ async fn main() -> Result<()> {
         .map(|path| dns_records::DnsRecords::load(path))
         .transpose()?;
     if check {
-        // Packet size is checked with a temporary key; --check never touches the real secret.
+        let keypair = match secret::check_keypair(&settings.secret_file)? {
+            Some(keypair) => keypair,
+            None => {
+                info!(
+                    "Secret file {:?} is missing; startup will generate it",
+                    settings.secret_file
+                );
+                Keypair::random()
+            }
+        };
         if let Some(records) = &records {
-            records.sign(&Keypair::random(), None)?;
+            records.sign(&keypair, None)?;
         }
         info!("Configuration and DNS records are valid");
         return Ok(());

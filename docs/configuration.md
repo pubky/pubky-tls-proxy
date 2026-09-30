@@ -13,12 +13,12 @@ pubky-tls-proxy [--config <FILE>] [--secret-file <FILE>] [--listen-addr <ADDR>].
 - `--config`: Config file to use instead of `~/.pubky-tls-proxy/config.toml`. Must exist.
 - `--secret-file`: File containing the pubky secret in HEX format (32 bytes/64 hex characters). Defaults to `secret` in the config directory. Created automatically if missing.
 - `--listen-addr`: Address to listen on. Can be repeated, e.g. for ports 80 and 443 [default: 0.0.0.0:8443].
-- `--http-backend-addr`: Backend for plain HTTP and decrypted Pubky TLS traffic [default: 127.0.0.1:6286]. `--backend-addr` still works as an alias.
-- `--https-backend-addr`: Backend for regular HTTPS traffic. If it isn't set, regular HTTPS connections are closed.
-- `--no-plain-http`: Close incoming plain HTTP connections without contacting the backend. Decrypted Pubky TLS still goes to the HTTP backend. Plain HTTP is enabled by default.
+- `--http-backend-addr`: Backend for plain HTTP and decrypted raw public key TLS traffic [default: 127.0.0.1:6286]. `--backend-addr` still works as an alias.
+- `--https-backend-addr`: Backend for certificate-based HTTPS traffic. If it isn't set, certificate-based HTTPS connections are closed.
+- `--no-plain-http`: Close incoming plain HTTP connections without contacting the backend. Decrypted raw public key TLS still goes to the HTTP backend. Plain HTTP is enabled by default.
 - `--no-proxy-protocol`: Don't send a [PROXY protocol](https://www.haproxy.org/download/2.9/doc/proxy-protocol.txt) header to the backends. See [PROXY protocol](#proxy-protocol).
 - `--max-connections`: Maximum active client connections across all listen addresses [default: 1024]. When full, new connections are closed immediately.
-- `--handshake-timeout-secs`: Maximum time to complete a Pubky TLS handshake after traffic detection [default: 10].
+- `--handshake-timeout-secs`: Maximum time to complete a raw public key TLS handshake after traffic detection [default: 10].
 - `--backend-timeout-secs`: Maximum time to connect to a backend and send its PROXY header [default: 10].
 - `--idle-timeout-secs`: Close an established connection after this many seconds without data transfer in either direction [default: 300]. Active connections have no maximum lifetime.
 - `--no-republish`: Disable pkarr publishing and republishing.
@@ -28,7 +28,7 @@ pubky-tls-proxy [--config <FILE>] [--secret-file <FILE>] [--listen-addr <ADDR>].
 - `--pkarr-relay`: Pkarr relay URL. Can be repeated. Replaces the default relays.
 - `--no-pkarr-dht` / `--no-pkarr-relays`: Don't republish to the DHT / to relays.
 - `--dns-records-file`: Use this TOML file as the complete pkarr record set. The default `dns-records.toml` beside the config is used if present.
-- `--check`: Validate configuration and DNS records offline, without creating a key, starting listeners, or publishing.
+- `--check`: Validate configuration, DNS records, and an existing secret offline, without creating a key, starting listeners, or publishing. A missing secret is reported as pending generation at startup; malformed or unreadable secrets are errors.
 
 Relative paths are resolved against the directory of the config file, both in the file and on the command line. By default that's `~/.pubky-tls-proxy/`. So `--secret-file secret` means `~/.pubky-tls-proxy/secret`.
 
@@ -46,7 +46,7 @@ are optional. Unknown keys are an error. The generated file is also available as
 secret_file = "secret"
 listen_addrs = ["0.0.0.0:8443"]
 http_backend_addr = "127.0.0.1:6286"
-# https_backend_addr = "127.0.0.1:6443"   # not set: regular HTTPS is rejected
+# https_backend_addr = "127.0.0.1:6443"   # not set: certificate-based HTTPS is rejected
 plain_http = true                          # false: reject incoming plain HTTP
 proxy_protocol = true
 max_connections = 1024
@@ -68,7 +68,7 @@ relays = ["https://pkarr.pubky.app", "https://pkarr.pubky.org"]
 
 The command line can only switch things off (`--no-...`). If the config file says `proxy_protocol = false`, no flag turns it back on.
 
-To dedicate a listen port to Pubky TLS, set `plain_http = false` and leave `https_backend_addr` unset. In a shared-port setup with HTTP redirects or Let's Encrypt HTTP-01 challenges, keep plain HTTP enabled and handle those requests in the backend.
+To dedicate a listen port to raw public key TLS, set `plain_http = false` and leave `https_backend_addr` unset. In a shared-port setup with HTTP redirects or Let's Encrypt HTTP-01 challenges, keep plain HTTP enabled and handle those requests in the backend.
 
 ## Republishing the pkarr packet
 
@@ -145,7 +145,7 @@ with a shutdown timeout error.
 
 ## Running directly in front of a Pubky homeserver
 
-Without nginx, the proxy can forward Pubky TLS straight to a homeserver. A homeserver doesn't understand the PROXY protocol, so turn it off:
+Without nginx, the proxy can terminate raw public key TLS and forward decrypted HTTP straight to a homeserver. A homeserver doesn't understand the PROXY protocol, so turn it off:
 
 ```bash
 pubky-tls-proxy --secret-file secret --listen-addr 0.0.0.0:8443 --http-backend-addr 127.0.0.1:6286 --no-proxy-protocol

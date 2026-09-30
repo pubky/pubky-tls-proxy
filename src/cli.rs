@@ -84,7 +84,7 @@ pub struct Args {
     #[arg(long, value_name = "FILE")]
     pub dns_records_file: Option<PathBuf>,
 
-    /// Validate the configuration and DNS records offline without creating a key or listeners.
+    /// Validate configuration, DNS records and an existing secret offline without creating a key or listeners.
     #[arg(long)]
     pub check: bool,
 

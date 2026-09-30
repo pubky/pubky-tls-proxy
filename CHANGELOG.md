@@ -6,6 +6,15 @@ All notable changes are documented here. The format is based on
 
 ## [Unreleased]
 
+### Changed
+- Describe connections as raw public key TLS or certificate-based TLS in the README,
+  setup guides, and configuration reference, rather than distinguishing browsers from Pubky clients.
+- Validate existing secret keys with `--check`; report missing keys as pending first-start
+  generation. Both nginx guides now use automatically generated keys in `~/.pubky-tls-proxy/`
+  and minimal systemd services running as the existing login user.
+- Use explicitly configured `dns-records.toml` files throughout both nginx setup guides,
+  with compatible installation instructions, validation, and local publishing checks.
+
 ### Added
 - Publish a complete pkarr DNS packet from optional `dns-records.toml`, automatically reload
   edits, and validate records offline with `--check`. Existing external-packet republishing
