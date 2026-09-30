@@ -15,7 +15,11 @@ certificate authority. The proxy handles this part so your web server doesn't ne
 
 These are connection types, not different kinds of applications: a browser or another
 application may support certificate-based TLS, raw public key TLS, or both. Pubky uses
-pkarr to discover the server's address; that discovery is separate from TLS.
+PKARR to discover the server's address; that discovery is separate from TLS.
+
+A **Public Key Domain** is a domain named by an encoded public key. Its DNS records
+are published through PKARR, so the server's IP address can change while the domain
+stays the same.
 
 ## Getting started
 
@@ -33,13 +37,13 @@ a setup guide:
 You will need:
 
 - A web server or HTTP service for the proxy to forward requests to.
-- A Pubky secret key. The proxy generates one on first startup at
+- A secret key. The proxy generates one on first startup at
   `~/.pubky-tls-proxy/secret`, or you can supply an existing key with `--secret-file`.
 - The proxy creates a commented `~/.pubky-tls-proxy/config.toml` on first startup.
   Edit it to customize the defaults; subsequent starts leave it alone.
 - For automatic publishing, a `dns-records.toml` file beside your config with an
   `A` record for your public address and an `HTTPS` record for the proxy's port.
-  Alternatively, publish a packet with another tool and let the proxy republish it.
+  Alternatively, publish a PKARR packet with another tool and let the proxy republish it.
   See [DNS records](docs/configuration.md#publishing-dns-records).
 
 ## How it works
@@ -63,8 +67,8 @@ configured to accept this header. If it doesn't support the PROXY protocol, use
 `--no-proxy-protocol`.
 
 With `dns-records.toml`, the proxy publishes changes automatically and republishes
-the packet every hour. Without the file, it keeps the existing behavior: republishing
-the latest network packet (or cached copy) unchanged, without signing new records.
+the PKARR packet every hour. Without the file, it republishes
+the latest PKARR packet from the network (or cached copy) unchanged.
 
 If a backend is unreachable, requests over plain HTTP or raw public key TLS receive a
 `502 Bad Gateway`. Certificate-based HTTPS connections are closed because only the backend
@@ -72,6 +76,7 @@ can complete their TLS handshake.
 
 ## Documentation
 
+- [Terminology](docs/terminology.md): domains, keys, connection types, and PKARR publishing.
 - [Configuration](docs/configuration.md): command-line options, config files,
   connection limits, packet republishing, and logging.
 - [Changelog](CHANGELOG.md): changes in each release.

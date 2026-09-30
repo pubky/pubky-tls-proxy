@@ -1,8 +1,8 @@
-//! Publishes locally managed DNS records or keeps an externally signed packet alive.
+//! Publishes DNS records in local-records mode or republishes a PKARR packet in external-packet mode.
 //!
-//! DHT nodes and relays drop packets after a while unless they are published again. The
-//! Without a local records file, the republisher resolves the most recent packet and
-//! publishes it again unchanged. With a records file, it signs the complete local record
+//! DHT nodes and relays drop packets after a while unless they are published again.
+//! Without a DNS records file, the republisher resolves the most recent PKARR packet and
+//! republishes it unchanged. With a DNS records file, it signs the complete local record
 //! set and publishes valid edits promptly.
 
 use crate::{dns_records::DnsRecords, packet_cache::PacketCache};
@@ -25,10 +25,10 @@ use url::Url;
 const RETRY_DELAYS: [Duration; 2] = [Duration::from_secs(60), Duration::from_secs(5 * 60)];
 
 /// Resolving with `ResolvePolicy::NetworkOnly` makes a relay run a full DHT query, which
-/// often takes longer than pkarr's default request timeout of 2 seconds.
+/// often takes longer than PKARR's default request timeout of 2 seconds.
 const RELAY_REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 
-/// One pkarr network that packets are resolved from and republished to.
+/// One PKARR network that packets are resolved from and published or republished to.
 ///
 /// Every network gets its own client. A `pkarr::Client` with both DHT and relays reports a
 /// single combined result, so it wouldn't tell which network failed or needs a retry.
@@ -38,28 +38,28 @@ pub struct PkarrNetwork {
 }
 
 impl PkarrNetwork {
-    /// The mainline DHT, joined through `bootstrap_nodes`.
+    /// The Mainline DHT, joined through `bootstrap_nodes`.
     pub fn dht(bootstrap_nodes: &[SocketAddrV4]) -> Result<Self> {
         let client = pkarr::Client::builder()
             .no_relays()
             .bootstrap(bootstrap_nodes)
             .build()
-            .context("Failed to create pkarr DHT client")?;
+            .context("Failed to create PKARR DHT client")?;
         Ok(Self {
             name: "DHT",
             client,
         })
     }
 
-    /// The given pkarr relays.
+    /// The given PKARR relays.
     pub fn relays(relays: &[Url]) -> Result<Self> {
         let client = pkarr::Client::builder()
             .no_dht()
             .relays(relays)
-            .context("Invalid pkarr relay URL")?
+            .context("Invalid PKARR relay URL")?
             .request_timeout(RELAY_REQUEST_TIMEOUT)
             .build()
-            .context("Failed to create pkarr relays client")?;
+            .context("Failed to create PKARR relays client")?;
         Ok(Self {
             name: "relays",
             client,
@@ -147,7 +147,7 @@ pub async fn republish_once(
     match source {
         PacketSource::Networks => update_cache(cache, &packet, cached_packet.as_ref()).await,
         PacketSource::Cache => warn!(
-            "The networks returned no pkarr packet or an older one. \
+            "The networks returned no PKARR packet or an older one. \
              Republishing the cached packet from {:?}.",
             cache.path()
         ),
@@ -168,14 +168,14 @@ pub async fn republish_once(
             PublishResult::Published => succeeded.push(network.name),
             PublishResult::NewerPacketExists => {
                 info!(
-                    "{} holds a newer pkarr packet than the one found",
+                    "{} holds a newer PKARR packet than the one found",
                     network.name
                 );
                 have_newer_packet.push(network.name);
             }
             PublishResult::Failed(error) => {
                 error!(
-                    "Republishing pkarr packet to {} failed after {} retries: {error}",
+                    "Republishing PKARR packet to {} failed after {} retries: {error}",
                     network.name,
                     retry_delays.len()
                 );
@@ -224,9 +224,9 @@ async fn update_cache(
     }
 
     match cache.store(packet).await {
-        Ok(()) => info!("Cached the pkarr packet in {:?}", cache.path()),
+        Ok(()) => info!("Cached the PKARR packet in {:?}", cache.path()),
         Err(error) => warn!(
-            "Can't cache the pkarr packet in {:?}: {error}",
+            "Can't cache the PKARR packet in {:?}: {error}",
             cache.path()
         ),
     }
@@ -243,7 +243,7 @@ async fn resolve_with_retries(
             break;
         };
         warn!(
-            "Resolving the pkarr packet failed. Retrying in {}s.",
+            "Resolving the PKARR packet failed. Retrying in {}s.",
             delay.as_secs()
         );
         tokio::time::sleep(*delay).await;
@@ -268,7 +268,7 @@ async fn resolve_most_recent(public_key: &PublicKey, networks: &[PkarrNetwork]) 
         match result {
             Ok(packet) => {
                 debug!(
-                    "{} returned the pkarr packet signed at {} (Unix µs)",
+                    "{} returned the PKARR packet signed at {} (Unix µs)",
                     network.name,
                     packet.timestamp().as_u64()
                 );
@@ -279,10 +279,10 @@ async fn resolve_most_recent(public_key: &PublicKey, networks: &[PkarrNetwork]) 
                     most_recent = Some(packet);
                 }
             }
-            Err(ResolveError::NotFound) => debug!("{} has no pkarr packet", network.name),
+            Err(ResolveError::NotFound) => debug!("{} has no PKARR packet", network.name),
             Err(error) => {
                 warn!(
-                    "Resolving the pkarr packet from {} failed: {error}",
+                    "Resolving the PKARR packet from {} failed: {error}",
                     network.name
                 );
                 has_failed_network = true;
@@ -308,7 +308,7 @@ async fn publish_with_retries(
             break;
         };
         warn!(
-            "Republishing pkarr packet to {} failed: {error}. Retrying in {}s.",
+            "Republishing PKARR packet to {} failed: {error}. Retrying in {}s.",
             network.name,
             delay.as_secs()
         );
@@ -322,7 +322,7 @@ async fn publish(network: &PkarrNetwork, packet: &SignedPacket) -> PublishResult
     match network.client.publish(packet).await {
         Ok(stored_node_count) => {
             debug!(
-                "{} stored the pkarr packet on {stored_node_count} DHT nodes",
+                "{} stored the PKARR packet on {stored_node_count} DHT nodes",
                 network.name
             );
             PublishResult::Published
@@ -407,7 +407,7 @@ async fn publish_local_periodically(
     mut records: DnsRecords,
     mut shutdown: watch::Receiver<bool>,
 ) {
-    info!("Managing {} pkarr DNS records from {path:?}", records.len());
+    info!("Managing {} DNS records from {path:?}", records.len());
     let mut ticker = tokio::time::interval(Duration::from_secs(3));
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let cached = cache.load().await;
@@ -489,7 +489,7 @@ fn read_updated_records(path: &Path, current: &DnsRecords) -> Option<DnsRecords>
     }
 }
 
-/// Resolve a conflict before re-signing: pkarr rejects any packet older than the newest
+/// Resolve a conflict before re-signing: PKARR rejects any packet older than the newest
 /// timestamp on a network. A finite retry bound avoids fighting another active writer forever.
 async fn publish_local(
     keypair: &Keypair,
@@ -502,7 +502,7 @@ async fn publish_local(
         // Persist before publishing so a failed network request cannot lose the packet.
         if let Err(error) = cache.store(packet).await {
             warn!(
-                "Cannot cache local pkarr packet in {:?}: {error:#}",
+                "Cannot cache local PKARR packet in {:?}: {error:#}",
                 cache.path()
             );
         }
@@ -517,12 +517,12 @@ async fn publish_local(
         for (network, result) in networks.iter().zip(results) {
             match result {
                 PublishResult::Published => {
-                    info!("Published local pkarr packet to {}", network.name)
+                    info!("Published local PKARR packet to {}", network.name)
                 }
                 PublishResult::NewerPacketExists => {
                     conflict = true;
                     success = false;
-                    warn!("{} has a newer pkarr packet", network.name);
+                    warn!("{} has a newer PKARR packet", network.name);
                 }
                 PublishResult::Failed(error) => {
                     success = false;
@@ -542,12 +542,12 @@ async fn publish_local(
         match records.sign(keypair, previous) {
             Ok(replacement) => *packet = replacement,
             Err(error) => {
-                error!("Cannot re-sign local pkarr records: {error:#}");
+                error!("Cannot re-sign local PKARR packet: {error:#}");
                 break;
             }
         }
     }
-    error!("Local pkarr packet was rejected repeatedly; another publisher may be using this key");
+    error!("Local PKARR packet was rejected repeatedly; another publisher may be using this key");
     false
 }
 
@@ -577,11 +577,11 @@ async fn republish_periodically(
 fn log_outcome(public_key: &PublicKey, outcome: &RepublishOutcome) {
     match outcome {
         RepublishOutcome::NotFound => warn!(
-            "No pkarr packet found for {public_key}, neither on the networks nor in the cache. \
+            "No PKARR packet found for {public_key}, neither on the networks nor in the cache. \
              Nothing to republish. Publish one first."
         ),
         RepublishOutcome::ResolveFailed => error!(
-            "Could not resolve the pkarr packet for {public_key} and none is cached. \
+            "Could not resolve the PKARR packet for {public_key} and none is cached. \
              Nothing republished. Check the network connection."
         ),
         RepublishOutcome::Republished {
@@ -589,7 +589,7 @@ fn log_outcome(public_key: &PublicKey, outcome: &RepublishOutcome) {
             have_newer_packet,
             ..
         } if succeeded.is_empty() && have_newer_packet.is_empty() => {
-            error!("Republishing the pkarr packet for {public_key} failed on all networks");
+            error!("Republishing the PKARR packet for {public_key} failed on all networks");
         }
         RepublishOutcome::Republished { succeeded, .. } if succeeded.is_empty() => {
             info!("Nothing republished for {public_key}: the networks hold a newer packet");
@@ -607,7 +607,7 @@ fn log_outcome(public_key: &PublicKey, outcome: &RepublishOutcome) {
                 PacketSource::Cache => " from the cache",
             };
             info!(
-                "Republished pkarr packet for {public_key}{from} (signed {packet_age_secs}s ago) to: {}",
+                "Republished PKARR packet for {public_key}{from} (signed {packet_age_secs}s ago) to: {}",
                 succeeded.join(", ")
             );
         }

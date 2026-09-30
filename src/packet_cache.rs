@@ -1,10 +1,10 @@
-//! A copy of the pkarr packet on disk.
+//! A copy of the PKARR packet on disk.
 //!
 //! If an externally managed packet disappears from the DHT and relays, the republisher
 //! can publish the cached copy. For locally managed records the cache tracks the latest
 //! signed timestamp, while the records file remains authoritative.
 //!
-//! The file holds one packet in pkarr's [`SignedPacket::serialize`] format.
+//! The file holds one PKARR packet in the `pkarr` crate's [`SignedPacket::serialize`] format.
 
 use anyhow::{bail, ensure, Context, Result};
 use pkarr::{PublicKey, SignedPacket};
@@ -44,7 +44,7 @@ impl PacketCache {
             Err(error) if error.kind() == io::ErrorKind::NotFound => return None,
             Err(error) => {
                 warn!(
-                    "Can't read the cached pkarr packet {:?}: {error}",
+                    "Can't read the cached PKARR packet {:?}: {error}",
                     self.path
                 );
                 return None;
@@ -55,7 +55,7 @@ impl PacketCache {
             Ok(packet) => Some(packet),
             Err(error) => {
                 warn!(
-                    "Ignoring the cached pkarr packet {:?}: {error:#}",
+                    "Ignoring the cached PKARR packet {:?}: {error:#}",
                     self.path
                 );
                 None
@@ -85,7 +85,7 @@ fn parse_cached_packet(bytes: &[u8], expected_public_key: &PublicKey) -> Result<
     );
 
     let packet =
-        SignedPacket::deserialize(bytes).context("the file doesn't hold a pkarr packet")?;
+        SignedPacket::deserialize(bytes).context("the file doesn't hold a PKARR packet")?;
     if packet.public_key() != *expected_public_key {
         bail!(
             "the packet belongs to another public key: {}",

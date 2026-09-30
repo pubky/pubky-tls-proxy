@@ -1,4 +1,4 @@
-//! Persistent proxy identity, generated only when the secret file is absent.
+//! Persistent proxy keypair, generated only when the secret key file is absent.
 
 use anyhow::{Context, Result};
 use pkarr::Keypair;
@@ -10,14 +10,15 @@ use std::{
 use tempfile::NamedTempFile;
 use tracing::info;
 
-/// Loads a hex secret or saves a new one before returning its keypair.
+/// Loads a hexadecimal secret key or saves a new one before returning its keypair.
 /// Existing files, including invalid ones, are never overwritten.
 pub fn load_or_create_keypair(path: &Path) -> Result<Keypair> {
     match fs::symlink_metadata(path) {
         Ok(_) => return read_keypair(path),
         Err(error) if error.kind() == ErrorKind::NotFound => {}
         Err(error) => {
-            return Err(error).with_context(|| format!("Failed to inspect secret file: {path:?}"))
+            return Err(error)
+                .with_context(|| format!("Failed to inspect secret key file: {path:?}"))
         }
     }
 
@@ -26,12 +27,12 @@ pub fn load_or_create_keypair(path: &Path) -> Result<Keypair> {
         .filter(|p| !p.as_os_str().is_empty())
         .unwrap_or(Path::new("."));
     fs::create_dir_all(parent)
-        .with_context(|| format!("Failed to create secret directory: {parent:?}"))?;
+        .with_context(|| format!("Failed to create secret key directory: {parent:?}"))?;
     let keypair = Keypair::random();
-    // Temp files have owner-only permissions on Unix. Publish the complete secret
+    // Temp files have owner-only permissions on Unix. Persist the complete secret key
     // without replacing a file another process may have created in the meantime.
     let mut temporary = NamedTempFile::new_in(parent)
-        .with_context(|| format!("Failed to create temporary secret in {parent:?}"))?;
+        .with_context(|| format!("Failed to create temporary secret key file in {parent:?}"))?;
     writeln!(temporary, "{}", hex::encode(keypair.secret_key()))
         .context("Failed to write secret key")?;
     temporary
@@ -40,30 +41,32 @@ pub fn load_or_create_keypair(path: &Path) -> Result<Keypair> {
         .context("Failed to sync secret key")?;
     match temporary.persist_noclobber(path) {
         Ok(_) => {
-            info!("Generated secret file at {path:?}");
+            info!("Generated secret key file at {path:?}");
             Ok(keypair)
         }
         Err(error) if error.error.kind() == ErrorKind::AlreadyExists => read_keypair(path),
-        Err(error) => Err(error).with_context(|| format!("Failed to save secret file: {path:?}")),
+        Err(error) => {
+            Err(error).with_context(|| format!("Failed to save secret key file: {path:?}"))
+        }
     }
 }
 
-/// Validates an existing identity without creating one. Only an absent path is allowed
+/// Validates an existing secret key without creating one. Only an absent path is allowed
 /// for first-time setup; unreadable files and dangling symlinks remain errors.
 pub fn check_keypair(path: &Path) -> Result<Option<Keypair>> {
     match fs::symlink_metadata(path) {
         Ok(_) => read_keypair(path).map(Some),
         Err(error) if error.kind() == ErrorKind::NotFound => Ok(None),
         Err(error) => {
-            Err(error).with_context(|| format!("Failed to inspect secret file: {path:?}"))
+            Err(error).with_context(|| format!("Failed to inspect secret key file: {path:?}"))
         }
     }
 }
 
 fn read_keypair(path: &Path) -> Result<Keypair> {
-    info!("Loading secret file from {path:?}");
+    info!("Loading secret key file from {path:?}");
     let secret_hex = fs::read_to_string(path)
-        .with_context(|| format!("Failed to read secret file: {path:?}"))?;
+        .with_context(|| format!("Failed to read secret key file: {path:?}"))?;
     let secret_bytes = hex::decode(secret_hex.trim()).context("Failed to decode hex secret key")?;
     let secret_key: [u8; 32] = secret_bytes
         .try_into()
@@ -76,7 +79,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn creates_parent_directories_and_reuses_saved_identity() {
+    fn creates_parent_directories_and_reuses_saved_keypair() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("nested/custom.hex");
         let first = load_or_create_keypair(&path).unwrap();
@@ -109,7 +112,7 @@ mod tests {
     }
 
     #[test]
-    fn concurrent_starts_use_the_same_identity() {
+    fn concurrent_starts_use_the_same_keypair() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("secret");
         let barrier = std::sync::Barrier::new(8);

@@ -4,7 +4,7 @@ use pkarr::Keypair;
 use rustls::{pki_types::ServerName, ClientConfig, ClientConnection, RootCertStore};
 use std::sync::Arc;
 
-/// The first bytes a regular HTTPS client (e.g. a browser) sends: a ClientHello offering X.509 certificates.
+/// The first bytes of certificate-based HTTPS: a ClientHello offering X.509 certificates.
 pub fn x509_client_hello(server_name: &str) -> Vec<u8> {
     let config =
         ClientConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
@@ -21,7 +21,7 @@ pub fn raw_public_key_client_hello() -> Vec<u8> {
     let pkarr_client = pkarr::Client::builder()
         .no_dht()
         .build()
-        .expect("a relay-only pkarr client builds without network access");
+        .expect("a relay-only PKARR client builds without network access");
     let config = ClientConfig::from(pkarr_client);
 
     client_hello(config, &Keypair::random().public_key().to_z32())

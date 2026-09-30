@@ -1,10 +1,9 @@
 //! Decides where an incoming connection goes by inspecting the first bytes the client sends.
 //!
 //! - Anything that doesn't start with a TLS handshake record is treated as plain HTTP.
-//! - A TLS ClientHello that offers Raw Public Keys ([RFC 7250]) as server certificate type
-//!   is Pubky TLS. Pubky clients only offer raw public keys; browsers and other regular
-//!   HTTPS clients never do.
-//! - Every other TLS connection is regular HTTPS.
+//! - A TLS ClientHello that offers raw public keys ([RFC 7250]) as server certificate type
+//!   is routed to the raw public key TLS acceptor, regardless of the client application.
+//! - Every other TLS connection is routed to the HTTPS backend using TLS passthrough.
 //!
 //! [RFC 7250]: https://datatracker.ietf.org/doc/html/rfc7250
 
@@ -25,8 +24,8 @@ const READ_CHUNK_BYTES: usize = 4096;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IncomingTraffic {
     PlainHttp,
-    PubkyTls,
-    RegularTls,
+    RawPublicKeyTls,
+    TlsPassthrough,
 }
 
 /// Result of traffic detection.
@@ -43,7 +42,7 @@ pub struct DetectedTraffic {
 ///
 /// Plain HTTP is recognised after the first read. For TLS, this reads until the complete
 /// ClientHello has been received. A ClientHello that rustls can't parse is classified as
-/// regular TLS so that the HTTPS backend can decide how to handle it.
+/// TLS passthrough so that the HTTPS backend can decide how to handle it.
 ///
 /// This waits for the client indefinitely; callers should apply a timeout.
 ///
@@ -71,7 +70,7 @@ pub async fn detect_traffic(client: &mut (impl AsyncRead + Unpin)) -> io::Result
         )
         .is_err();
         if is_parser_buffer_full {
-            break IncomingTraffic::RegularTls;
+            break IncomingTraffic::TlsPassthrough;
         }
         parsed_byte_count = initial_bytes.len();
 
@@ -80,11 +79,11 @@ pub async fn detect_traffic(client: &mut (impl AsyncRead + Unpin)) -> io::Result
                 break classify_client_hello(accepted.client_hello().server_cert_types())
             }
             Ok(None) => {} // The ClientHello is incomplete; read more below.
-            Err(_unparsable_client_hello) => break IncomingTraffic::RegularTls,
+            Err(_unparsable_client_hello) => break IncomingTraffic::TlsPassthrough,
         }
 
         if initial_bytes.len() >= MAX_CLIENT_HELLO_BYTES {
-            break IncomingTraffic::RegularTls;
+            break IncomingTraffic::TlsPassthrough;
         }
         read_more(client, &mut initial_bytes).await?;
     };
@@ -100,9 +99,9 @@ fn classify_client_hello(offered_server_cert_types: Option<&[CertificateType]>) 
         .is_some_and(|cert_types| cert_types.contains(&CertificateType::RawPublicKey));
 
     if offers_raw_public_key {
-        IncomingTraffic::PubkyTls
+        IncomingTraffic::RawPublicKeyTls
     } else {
-        IncomingTraffic::RegularTls
+        IncomingTraffic::TlsPassthrough
     }
 }
 
@@ -149,22 +148,22 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn client_hello_offering_raw_public_key_is_pubky_tls() {
+    async fn client_hello_offering_raw_public_key_is_raw_public_key_tls() {
         let client_hello = raw_public_key_client_hello();
 
         let detected = detect(&client_hello).await.unwrap();
 
-        assert_eq!(detected.traffic, IncomingTraffic::PubkyTls);
+        assert_eq!(detected.traffic, IncomingTraffic::RawPublicKeyTls);
         assert_eq!(detected.initial_bytes, client_hello);
     }
 
     #[tokio::test]
-    async fn client_hello_offering_only_x509_is_regular_tls() {
+    async fn client_hello_offering_only_x509_is_tls_passthrough() {
         let client_hello = x509_client_hello("example.com");
 
         let detected = detect(&client_hello).await.unwrap();
 
-        assert_eq!(detected.traffic, IncomingTraffic::RegularTls);
+        assert_eq!(detected.traffic, IncomingTraffic::TlsPassthrough);
         assert_eq!(detected.initial_bytes, client_hello);
     }
 
@@ -176,18 +175,18 @@ mod tests {
 
         let detected = detect_traffic(&mut client).await.unwrap();
 
-        assert_eq!(detected.traffic, IncomingTraffic::PubkyTls);
+        assert_eq!(detected.traffic, IncomingTraffic::RawPublicKeyTls);
         assert_eq!(detected.initial_bytes, client_hello);
     }
 
     #[tokio::test]
-    async fn tls_handshake_that_is_not_a_client_hello_is_regular_tls() {
+    async fn tls_handshake_that_is_not_a_client_hello_is_tls_passthrough() {
         // record header: handshake, TLS 1.0, 4 bytes | message: ServerHello (type 2), 0 bytes
         let server_hello_record: &[u8] = &[TLS_HANDSHAKE_RECORD_TYPE, 3, 1, 0, 4, 2, 0, 0, 0];
 
         let detected = detect(server_hello_record).await.unwrap();
 
-        assert_eq!(detected.traffic, IncomingTraffic::RegularTls);
+        assert_eq!(detected.traffic, IncomingTraffic::TlsPassthrough);
     }
 
     #[tokio::test]
