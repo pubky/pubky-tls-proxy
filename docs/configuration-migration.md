@@ -1,4 +1,41 @@
-# Migrating to 0.4.0
+# Configuration migration
+
+## Upcoming release: explicit setup and publishing modes
+
+Startup and `--check` now require an existing configuration and secret key. They
+never create setup files. Run `pubky-tls-proxy init` before starting a fresh
+installation, or prepare the files through your deployment tooling. For a custom
+directory use `init --directory /path/to/proxy`, then
+`--config /path/to/proxy/config.toml` when checking or running.
+
+Keep existing secret keys to retain your Public Key Domain. If the files already
+exist, `init` validates and preserves them. Back up the key generated during setup.
+
+Local-record publishing is the default and requires `dns-records.toml` beside the
+config, or the explicitly configured records file. Existing local-record deployments
+need no mode setting. Removing the records file now fails startup rather than
+silently switching to external-packet republishing.
+
+For externally managed records, explicitly select:
+
+```toml
+[pkarr]
+mode = "external-packet"
+```
+
+Alternatively, pass `--pkarr-mode external-packet`. Remove any explicitly configured
+`dns_records_file`; it conflicts with external-packet mode. The default records file,
+if present, is ignored in that mode. Set this mode **before running init** for an
+existing externally managed identity so setup does not create local records.
+
+`[pkarr] publish = false` or `--no-pkarr-publish` removes the records requirement
+for both startup and `--check`, but config and key remain required. `--check` now
+validates only files required by the selected deployment. Packet cache files remain
+optional and are created by the publisher as needed.
+
+These breaking changes belong in the next minor release while the project is pre-1.0.
+
+## Migrating to 0.4.0
 
 Version **0.4.0 introduces breaking changes** to CLI options and configuration keys.
 They do not change routing, key formats, default file locations, or publishing behavior.

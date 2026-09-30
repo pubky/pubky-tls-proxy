@@ -37,36 +37,22 @@ async fn main() -> Result<()> {
     }
     let check = args.check;
     let settings = Settings::load(args)?;
+    let keypair = secret::check_keypair(&settings.secret_key_file)?.with_context(|| {
+        format!("Secret key file {:?} does not exist. Run pubky-tls-proxy init --directory {:?} or supply an existing key with --secret-key-file.", settings.secret_key_file, settings.config_file.parent().unwrap_or(std::path::Path::new(".")))
+    })?;
     let records = settings
         .dns_records_file
         .as_ref()
         .map(|path| dns_records::DnsRecords::load(path))
         .transpose()?;
-    if check {
-        let keypair = match secret::check_keypair(&settings.secret_key_file)? {
-            Some(keypair) => keypair,
-            None => {
-                info!(
-                    "Secret key file {:?} is missing; startup will generate it",
-                    settings.secret_key_file
-                );
-                Keypair::random()
-            }
-        };
-        if let Some(records) = &records {
-            records.sign(&keypair, None)?;
-        }
-        info!("Configuration and DNS records are valid");
-        return Ok(());
-    }
-    match &settings.config_file {
-        Some(config_file) => info!("Using config file {config_file:?}"),
-        None => info!("No config file found, using command line arguments and defaults"),
-    }
-    let keypair = secret::load_or_create_keypair(&settings.secret_key_file)?;
     if let Some(records) = &records {
         records.sign(&keypair, None)?;
     }
+    if check {
+        info!("Configuration and DNS records are valid");
+        return Ok(());
+    }
+    info!("Using config file {:?}", settings.config_file);
 
     let proxy = Proxy::start(ProxyConfig {
         keypair: keypair.clone(),

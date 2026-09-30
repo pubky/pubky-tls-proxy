@@ -49,8 +49,8 @@ a setup guide.
 You will need:
 
 - A web server or HTTP service for the proxy to forward requests to.
-- (Optionally) a secret key. The proxy generates one on first startup at
-  `~/.pubky-tls-proxy/secret`, or you can supply an existing key with `--secret-key-file`.
+- A configuration file and secret key prepared with `init` or your deployment tooling.
+  Startup requires both files. Use `--secret-key-file` to select an existing key.
 
 ## How it works
 
@@ -72,9 +72,10 @@ By default, the proxy sends the client's address to each backend using a
 configured to accept this header. If it doesn't support the PROXY protocol, use
 `--no-proxy-protocol`.
 
-With `dns-records.toml`, the proxy publishes changes automatically and republishes
-the PKARR packet every hour. Without the file, it republishes
-the latest PKARR packet from the network (or cached copy) unchanged.
+Local-record publishing is the default: startup requires `dns-records.toml`, publishes
+changes automatically, and republishes the PKARR packet every hour. To use externally
+managed records, explicitly set `[pkarr] mode = "external-packet"`; the proxy then
+republishes the latest packet from the network (or cached copy) unchanged.
 
 ## Documentation
 

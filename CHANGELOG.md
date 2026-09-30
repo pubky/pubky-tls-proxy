@@ -12,6 +12,13 @@ All notable changes are documented here. The format is based on
   is a suggestion only; unattended setup requires an explicit `--public-ip`.
   Existing files are validated and preserved, and partial setup can be resumed.
 
+### Changed
+- **Breaking:** Startup and `--check` require an existing config and secret key;
+  only `init` creates missing setup files. Local-record publishing is now the
+  default and requires a DNS records file. Select `[pkarr] mode = "external-packet"`
+  or `--pkarr-mode external-packet` for externally managed packets. Disabled
+  publishing requires no records. See the configuration migration guide.
+
 ## [0.4.0] - 2026-09-30
 
 ### Changed

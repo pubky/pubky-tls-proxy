@@ -1,4 +1,4 @@
-//! Persistent proxy keypair, generated only when the secret key file is absent.
+//! Persistent proxy identity. Only init creates a missing key; startup reads it.
 
 use anyhow::{Context, Result};
 use pkarr::Keypair;

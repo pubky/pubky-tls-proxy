@@ -1,6 +1,7 @@
 # Pubky TLS Proxy
 #
-# Start the proxy without editing this file. To change a setting, remove the
+# Run `pubky-tls-proxy init` to prepare files, then review them before starting.
+# To change a setting, remove the
 # "# " at the start of its line and edit the value.
 #
 # Command-line options take precedence over this file. Relative file paths
@@ -10,7 +11,7 @@
 
 # Secret key
 # ----------
-# The proxy creates this secret key on first start and reuses it thereafter.
+# Init creates this secret key. Startup requires it and never replaces it.
 # Back it up to retain control of your Public Key Domain.
 # secret_key_file = "secret"
 
@@ -53,12 +54,13 @@
 # A record for your public address and an HTTPS record for the proxy's port.
 # `pubky-tls-proxy init` can prepare these records without publishing them.
 # Review the public address and port before starting the proxy.
-# The proxy publishes valid edits automatically. Without that file, it
-# republishes an externally published PKARR packet unchanged (external-packet mode).
+# The proxy publishes valid edits automatically. Local-records mode requires this file.
+# Select external-packet mode to republish an externally managed packet instead.
 # Leave this on unless another service handles publishing.
 [pkarr]
 # publish = true
-# dns_records_file = "dns-records.toml" # optional; detected beside this file
+# mode = "local-records" # or "external-packet"; cannot specify dns_records_file in external mode
+# dns_records_file = "dns-records.toml" # required in local mode; defaults beside this file
 # republish_interval_secs = 3600        # One hour between republish runs
 # packet_cache_file = "pkarr-packet.cache"
 

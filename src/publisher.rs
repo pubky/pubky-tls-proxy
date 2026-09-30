@@ -579,8 +579,8 @@ fn log_outcome(public_key: &PublicKey, outcome: &RepublishOutcome) {
     match outcome {
         RepublishOutcome::NotFound => warn!(
             "No PKARR packet found for {public_key}, neither on the networks nor in the cache. \
-             Nothing to republish. Run `pubky-tls-proxy init` to prepare local DNS records, \
-             or publish a packet with your external publishing tool."
+             Nothing to republish. Publish a packet with your external publishing tool. \
+             To manage records locally, select local-records mode and run pubky-tls-proxy init."
         ),
         RepublishOutcome::ResolveFailed => error!(
             "Could not resolve the PKARR packet for {public_key} and none is cached. \

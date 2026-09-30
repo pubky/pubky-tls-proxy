@@ -39,12 +39,13 @@ pub async fn run(args: &InitArgs) -> Result<()> {
             .join(".pubky-tls-proxy"),
     };
     let config_path = directory.join("config.toml");
-    let (secret_path, records_path) = crate::config::init_file_paths(&config_path)?;
+    let paths = crate::config::init_file_paths(&config_path)?;
+    let secret_path = paths.secret_key_file;
+    let records_path = paths.dns_records_file;
     let existing_key = crate::secret::check_keypair(&secret_path)?;
-    let existing_records = if path_exists(&records_path)? {
-        Some(crate::dns_records::DnsRecords::load(&records_path)?)
-    } else {
-        None
+    let existing_records = match &records_path {
+        Some(path) if path_exists(path)? => Some(crate::dns_records::DnsRecords::load(path)?),
+        _ => None,
     };
     if let Some(records) = &existing_records {
         records.sign(
@@ -59,14 +60,17 @@ pub async fn run(args: &InitArgs) -> Result<()> {
             "No interactive terminal; use --non-interactive and --public-ip"
         );
     }
-    let records_text = if existing_records.is_none() {
+    let records_text = if records_path.is_some() && existing_records.is_none() {
         Some(prepare_records(args).await?)
     } else {
         None
     };
 
     println!("Setup files (existing files are preserved):");
-    for path in [&config_path, &secret_path, &records_path] {
+    for path in [&config_path, &secret_path]
+        .into_iter()
+        .chain(records_path.iter())
+    {
         println!(
             "  {}: {}",
             path.display(),
@@ -77,13 +81,17 @@ pub async fn run(args: &InitArgs) -> Result<()> {
             }
         );
     }
-    if let Some(text) = &records_text {
-        crate::dns_records::DnsRecords::parse(text, &records_path)?
+    if let (Some(text), Some(path)) = (&records_text, &records_path) {
+        crate::dns_records::DnsRecords::parse(text, path)?
             .sign(&existing_key.unwrap_or_else(pkarr::Keypair::random), None)?;
         println!("\nDNS records:\n{text}");
-    } else {
+    } else if records_path.is_some() {
         println!(
             "Existing DNS records will be preserved; --public-ip and --port do not change them."
+        );
+    } else {
+        println!(
+            "This configuration does not use local DNS records; no records file will be created."
         );
     }
     if interactive && !prompt("Create missing files? (y/N)", Some("n"))?.eq_ignore_ascii_case("y") {
@@ -92,11 +100,17 @@ pub async fn run(args: &InitArgs) -> Result<()> {
     }
     create_file_if_missing(&config_path, include_str!("../config.example.toml"))?;
     let keypair = crate::secret::load_or_create_keypair(&secret_path)?;
-    if let Some(text) = records_text {
-        create_file_if_missing(&records_path, &text)?;
+    if let (Some(text), Some(path)) = (records_text, &records_path) {
+        create_file_if_missing(path, &text)?;
     }
-    crate::dns_records::DnsRecords::load(&records_path)?.sign(&keypair, None)?;
-    println!("Setup complete. Nothing has been published.\nPublic Key Domain: {}\nReview {}, then run pubky-tls-proxy with --config {:?} to publish (unless publishing is disabled in your config).\nEnsure the advertised TCP port reaches this machine.", keypair.public_key(), records_path.display(), config_path);
+    if let Some(path) = &records_path {
+        crate::dns_records::DnsRecords::load(path)?.sign(&keypair, None)?;
+        println!(
+            "Review {} and ensure the advertised TCP port reaches this machine.",
+            path.display()
+        );
+    }
+    println!("Setup complete. Nothing has been published.\nPublic Key Domain: {}\nReview the configuration, then run pubky-tls-proxy with --config {:?}.", keypair.public_key(), config_path);
     Ok(())
 }
 

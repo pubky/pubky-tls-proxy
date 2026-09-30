@@ -192,3 +192,37 @@ fn concurrent_setup_keeps_complete_files_and_a_single_identity() {
     assert!(domains.iter().all(|domain| domain == &domains[0]));
     assert_eq!(fs::read_dir(directory).unwrap().count(), 3);
 }
+
+#[test]
+fn init_skips_local_records_for_external_mode_or_disabled_publishing() {
+    for config in [
+        "[pkarr]\nmode = 'external-packet'\n",
+        "[pkarr]\npublish = false\n",
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("config.toml"), config).unwrap();
+        let result = init(dir.path(), &[]);
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        assert!(dir.path().join("secret").is_file());
+        assert!(!dir.path().join("dns-records.toml").exists());
+        assert_eq!(
+            fs::read_to_string(dir.path().join("config.toml")).unwrap(),
+            config
+        );
+        let check = Command::new(env!("CARGO_BIN_EXE_pubky-tls-proxy"))
+            .arg("--config")
+            .arg(dir.path().join("config.toml"))
+            .arg("--check")
+            .output()
+            .unwrap();
+        assert!(
+            check.status.success(),
+            "{}",
+            String::from_utf8_lossy(&check.stderr)
+        );
+    }
+}
