@@ -145,7 +145,8 @@ For an existing installation, first update its configuration using the
 
 ## 5. Configure the proxy
 
-Run the proxy as your normal login user. Keep its configuration, secret key file, and packet cache together in `~/.pubky-tls-proxy/`. Create the directory without `sudo`:
+This guide runs the proxy as your normal login user. You may want to create a dedicated user in production environments.
+Keep its configuration, secret key file, and packet cache together in `~/.pubky-tls-proxy/`. Create the directory without `sudo`:
 
 ```bash
 mkdir -p ~/.pubky-tls-proxy

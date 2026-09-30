@@ -3,8 +3,10 @@
 [![GitHub Release](https://img.shields.io/github/v/release/pubky/pubky-tls-proxy)](https://github.com/pubky/pubky-tls-proxy/releases/latest/)
 [![Telegram Chat Group](https://img.shields.io/badge/Chat-Telegram-violet)](https://t.me/pubkycore)
 
-Pubky TLS Proxy makes an existing web server, such as nginx, accessible over raw public
-key TLS. It handles the TLS connection and forwards decrypted HTTP traffic to your server.
+Pubky TLS Proxy is a reverse proxy that adds raw public key TLS support to existing
+HTTP services, with optional passthrough for certificate-based TLS. It handles the
+raw public key TLS connection and forwards decrypted HTTP traffic to your server,
+such as nginx.
 
 You can give raw public key TLS its own port or share ports 80 and 443 with plain HTTP
 and certificate-based HTTPS. On shared ports, your web server continues to handle certificates.

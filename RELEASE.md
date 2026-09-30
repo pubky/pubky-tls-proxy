@@ -23,6 +23,7 @@ In the commands, replace `0.4.0` with the version you're releasing.
    - In `CHANGELOG.md`, move the entries under `## [Unreleased]` to a new
      `## [0.4.0] - YYYY-MM-DD` section, dated with the release day, and update the
      compare links at the bottom.
+   - Update the versions used in `docs/guides/`.
    - Commit as `chore(release): 0.4.0`, open a PR and merge it.
 
 2. **Tag the merge commit** on `main` with a signed tag and push it:
