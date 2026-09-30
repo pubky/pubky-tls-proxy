@@ -12,7 +12,7 @@
 # ----------
 # The proxy creates this secret key on first start and reuses it thereafter.
 # Back it up to retain control of your Public Key Domain.
-# secret_file = "secret"
+# secret_key_file = "secret"
 
 
 # Where traffic goes
@@ -24,9 +24,9 @@
 # Plain HTTP and decrypted raw public key TLS go to this HTTP backend.
 # http_backend_addr = "127.0.0.1:6286"
 
-# Certificate-based HTTPS stays encrypted and goes to this HTTPS backend.
-# No HTTPS backend is configured by default, so certificate-based HTTPS is rejected.
-# https_backend_addr = "127.0.0.1:6443"
+# Certificate-based HTTPS and unparseable TLS handshakes go to this backend unchanged.
+# No TLS passthrough backend is configured by default, so those connections are rejected.
+# tls_passthrough_backend_addr = "127.0.0.1:6443"
 
 # Set to false to reject plain HTTP. Raw public key TLS still reaches the HTTP backend.
 # plain_http = true
@@ -42,9 +42,9 @@
 # max_connections = 1024
 
 # Time limits in seconds. Each must be greater than zero.
-# handshake_timeout_secs = 10   # Complete a raw public key TLS handshake
-# backend_timeout_secs = 10     # Connect to a backend and send its PROXY protocol header
-# idle_timeout_secs = 300       # No traffic in either direction
+# rpk_handshake_timeout_secs = 10  # Complete a raw public key (RPK) TLS handshake
+# backend_setup_timeout_secs = 10 # Connect to a backend and send its PROXY protocol header
+# idle_timeout_secs = 300         # No traffic in either direction
 
 
 # Publishing the PKARR packet
@@ -54,18 +54,17 @@
 # The proxy publishes valid edits automatically. Without that file, it
 # republishes an externally published PKARR packet unchanged (external-packet mode).
 # Leave this on unless another service handles publishing.
-[republish]
-# enabled = true
-# interval_secs = 3600          # One hour between runs
-# cache_file = "pkarr-packet.cache"
+[pkarr]
+# publish = true
+# dns_records_file = "dns-records.toml" # optional; detected beside this file
+# republish_interval_secs = 3600        # One hour between republish runs
+# packet_cache_file = "pkarr-packet.cache"
 
 
 # Where to publish and republish
 # ------------------------------
 # By default, the proxy uses both the Mainline DHT and PKARR relays.
 # Setting either list replaces its defaults. Use [] to disable that network.
-# Do not disable both networks while republishing is enabled.
-[pkarr]
-# records_file = "dns-records.toml" # optional; detected beside this file
-# bootstrap_nodes = ["router.bittorrent.com:6881"]
-# relays = ["https://pkarr.pubky.app"]
+# Do not disable both networks while publishing is enabled.
+# dht_bootstrap_nodes = ["router.bittorrent.com:6881"]
+# relay_urls = ["https://pkarr.pubky.app"]

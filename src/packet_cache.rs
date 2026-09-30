@@ -1,6 +1,6 @@
 //! A copy of the PKARR packet on disk.
 //!
-//! If an externally managed packet disappears from the DHT and relays, the republisher
+//! If an externally managed packet disappears from the DHT and relays, the publisher
 //! can publish the cached copy. For locally managed records the cache tracks the latest
 //! signed timestamp, while the records file remains authoritative.
 //!

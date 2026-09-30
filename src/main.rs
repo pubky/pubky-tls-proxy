@@ -13,16 +13,16 @@ mod packet_cache;
 mod prefixed_stream;
 mod proxy;
 mod proxy_protocol;
-mod republisher;
+mod publisher;
 mod secret;
 #[cfg(test)]
 mod test_support;
 mod traffic_detection;
 
-use config::{RepublishSettings, Settings};
+use config::{PkarrPublishSettings, Settings};
 use packet_cache::PacketCache;
 use proxy::{Proxy, ProxyConfig};
-use republisher::{PkarrNetwork, Republisher};
+use publisher::{PkarrNetwork, PkarrPublisher};
 
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -34,17 +34,17 @@ async fn main() -> Result<()> {
     let check = args.check;
     let settings = Settings::load(args)?;
     let records = settings
-        .records_file
+        .dns_records_file
         .as_ref()
         .map(|path| dns_records::DnsRecords::load(path))
         .transpose()?;
     if check {
-        let keypair = match secret::check_keypair(&settings.secret_file)? {
+        let keypair = match secret::check_keypair(&settings.secret_key_file)? {
             Some(keypair) => keypair,
             None => {
                 info!(
                     "Secret key file {:?} is missing; startup will generate it",
-                    settings.secret_file
+                    settings.secret_key_file
                 );
                 Keypair::random()
             }
@@ -59,7 +59,7 @@ async fn main() -> Result<()> {
         Some(config_file) => info!("Using config file {config_file:?}"),
         None => info!("No config file found, using command line arguments and defaults"),
     }
-    let keypair = secret::load_or_create_keypair(&settings.secret_file)?;
+    let keypair = secret::load_or_create_keypair(&settings.secret_key_file)?;
     if let Some(records) = &records {
         records.sign(&keypair, None)?;
     }
@@ -68,7 +68,7 @@ async fn main() -> Result<()> {
         keypair: keypair.clone(),
         listen_addrs: settings.listen_addrs.clone(),
         http_backend_addr: settings.http_backend_addr,
-        https_backend_addr: settings.https_backend_addr,
+        tls_passthrough_backend_addr: settings.tls_passthrough_backend_addr,
         plain_http: settings.plain_http,
         send_proxy_protocol: settings.send_proxy_protocol,
         limits: settings.limits,
@@ -76,8 +76,8 @@ async fn main() -> Result<()> {
     .await?;
     log_proxy_settings(&proxy, &settings);
 
-    let republisher = match &settings.republish {
-        Some(republish) => Some(start_republisher(&keypair, republish, records)?),
+    let publisher = match &settings.pkarr_publish {
+        Some(publish_settings) => Some(start_pkarr_publisher(&keypair, publish_settings, records)?),
         None => {
             info!("PKARR publishing and republishing: off");
             None
@@ -87,17 +87,17 @@ async fn main() -> Result<()> {
     wait_for_shutdown_signal().await?;
     info!("Received shutdown signal, shutting down...");
 
-    // Stop both services together; a republisher error must not skip connection draining.
-    let stop_republisher = async {
-        if let Some(republisher) = republisher {
-            republisher.shutdown(Some(SHUTDOWN_TIMEOUT)).await?;
+    // Stop both services together; a publisher error must not skip connection draining.
+    let stop_publisher = async {
+        if let Some(publisher) = publisher {
+            publisher.shutdown(Some(SHUTDOWN_TIMEOUT)).await?;
         }
         Ok::<_, anyhow::Error>(())
     };
-    let (proxy_result, republisher_result) =
-        tokio::join!(proxy.shutdown(Some(SHUTDOWN_TIMEOUT)), stop_republisher);
+    let (proxy_result, publisher_result) =
+        tokio::join!(proxy.shutdown(Some(SHUTDOWN_TIMEOUT)), stop_publisher);
     proxy_result?;
-    republisher_result?;
+    publisher_result?;
     info!("Shutdown complete.");
 
     Ok(())
@@ -153,9 +153,9 @@ fn log_proxy_settings(proxy: &Proxy, settings: &Settings) {
         info!("Plain HTTP -> rejected");
     }
     info!("Raw public key TLS -> {}", settings.http_backend_addr);
-    match settings.https_backend_addr {
-        Some(https_backend_addr) => info!("Certificate-based HTTPS -> {https_backend_addr}"),
-        None => info!("Certificate-based HTTPS -> rejected, no HTTPS backend configured"),
+    match settings.tls_passthrough_backend_addr {
+        Some(addr) => info!("TLS passthrough -> {addr}"),
+        None => info!("TLS passthrough -> rejected, no TLS passthrough backend configured"),
     }
     let proxy_protocol_state = if settings.send_proxy_protocol {
         "on"
@@ -165,43 +165,51 @@ fn log_proxy_settings(proxy: &Proxy, settings: &Settings) {
     info!("PROXY protocol header: {proxy_protocol_state}");
 }
 
-fn start_republisher(
+fn start_pkarr_publisher(
     keypair: &Keypair,
-    republish: &RepublishSettings,
+    settings: &PkarrPublishSettings,
     records: Option<dns_records::DnsRecords>,
-) -> Result<Republisher> {
+) -> Result<PkarrPublisher> {
     let mut networks = Vec::new();
-    match &republish.dht_bootstrap_nodes {
+    match &settings.dht_bootstrap_nodes {
         Some(bootstrap_nodes) => {
-            info!("Republishing to the DHT, bootstrapping via {bootstrap_nodes:?}");
+            info!("PKARR publishing to the DHT, bootstrapping via {bootstrap_nodes:?}");
             networks.push(PkarrNetwork::dht(bootstrap_nodes)?);
         }
-        None => info!("Republishing to the DHT: off"),
+        None => info!("PKARR publishing to the DHT: off"),
     }
-    match &republish.relays {
-        Some(relays) => {
-            let relay_list: Vec<&str> = relays.iter().map(|relay| relay.as_str()).collect();
-            info!("Republishing to relays {relay_list:?}");
-            networks.push(PkarrNetwork::relays(relays)?);
+    match &settings.relay_urls {
+        Some(relay_urls) => {
+            let relay_list: Vec<&str> = relay_urls.iter().map(|relay| relay.as_str()).collect();
+            info!("PKARR publishing to relays {relay_list:?}");
+            networks.push(PkarrNetwork::relays(relay_urls)?);
         }
-        None => info!("Republishing to relays: off"),
+        None => info!("PKARR publishing to relays: off"),
     }
     info!(
         "Republishing the PKARR packet every {}s",
-        republish.interval.as_secs()
+        settings.republish_interval.as_secs()
     );
-    info!("Caching the PKARR packet in {:?}", republish.cache_file);
-    let cache = PacketCache::new(republish.cache_file.clone(), keypair.public_key());
+    info!(
+        "Caching the PKARR packet in {:?}",
+        settings.packet_cache_file
+    );
+    let cache = PacketCache::new(settings.packet_cache_file.clone(), keypair.public_key());
 
-    Ok(match (records, &republish.records_file) {
-        (Some(records), Some(path)) => Republisher::start_local(
+    Ok(match (records, &settings.dns_records_file) {
+        (Some(records), Some(path)) => PkarrPublisher::start_local_records(
             keypair.clone(),
             networks,
             cache,
-            republish.interval,
+            settings.republish_interval,
             path.clone(),
             records,
         ),
-        _ => Republisher::start(keypair.public_key(), networks, cache, republish.interval),
+        _ => PkarrPublisher::start_external_packet(
+            keypair.public_key(),
+            networks,
+            cache,
+            settings.republish_interval,
+        ),
     })
 }

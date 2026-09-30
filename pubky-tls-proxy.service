@@ -2,6 +2,7 @@
 #
 # Runs the proxy as the unprivileged user `pubky-tls-proxy` with the config in
 # /etc/pubky-tls-proxy/config.toml. See docs/guides/nginx-letsencrypt.md.
+# For renamed config keys and custom ExecStart options, see docs/configuration-migration.md.
 [Unit]
 Description=Pubky TLS Proxy - routes raw public key TLS, certificate-based HTTPS and plain HTTP to a web server
 Documentation=https://github.com/pubky/pubky-tls-proxy

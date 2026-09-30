@@ -43,15 +43,15 @@ pub async fn forward_plain_http(
     addrs: ConnectionAddrs,
     limits: ConnectionLimits,
 ) -> Result<()> {
-    let mut backend_stream = match connect_to_backend(backend, addrs, limits.backend_timeout).await
-    {
-        Ok(stream) => stream,
-        Err(error) => {
-            let _ =
-                tokio::time::timeout(ERROR_RESPONSE_TIMEOUT, send_bad_gateway(&mut client)).await;
-            return Err(error);
-        }
-    };
+    let mut backend_stream =
+        match connect_to_backend(backend, addrs, limits.backend_setup_timeout).await {
+            Ok(stream) => stream,
+            Err(error) => {
+                let _ = tokio::time::timeout(ERROR_RESPONSE_TIMEOUT, send_bad_gateway(&mut client))
+                    .await;
+                return Err(error);
+            }
+        };
 
     relay(&mut client, &mut backend_stream, limits.idle_timeout).await
 }
@@ -65,7 +65,8 @@ pub async fn forward_raw_public_key_tls(
     limits: ConnectionLimits,
 ) -> Result<()> {
     let decrypted_client =
-        match tokio::time::timeout(limits.handshake_timeout, tls_acceptor.accept(client)).await {
+        match tokio::time::timeout(limits.rpk_handshake_timeout, tls_acceptor.accept(client)).await
+        {
             Ok(result) => result.context("Raw public key TLS handshake failed")?,
             Err(_) => {
                 debug!(
@@ -93,7 +94,8 @@ pub async fn forward_tls_passthrough(
     addrs: ConnectionAddrs,
     limits: ConnectionLimits,
 ) -> Result<()> {
-    let mut backend_stream = connect_to_backend(backend, addrs, limits.backend_timeout).await?;
+    let mut backend_stream =
+        connect_to_backend(backend, addrs, limits.backend_setup_timeout).await?;
 
     relay(&mut client, &mut backend_stream, limits.idle_timeout).await
 }

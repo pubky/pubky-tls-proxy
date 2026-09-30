@@ -13,7 +13,7 @@ Use these terms consistently in documentation, CLI help, logs, and source commen
 | **Certificate-based HTTPS** | HTTP over certificate-based TLS. Use **certificate-based TLS** when describing the TLS mechanism itself. |
 | **Plain HTTP** | HTTP without TLS. |
 | **HTTP backend** | The service receiving plain HTTP and HTTP decrypted from raw public key TLS. |
-| **HTTPS backend** | The service receiving TLS passthrough traffic and handling its TLS handshake. |
+| **TLS passthrough backend** | The service receiving encrypted TLS traffic and handling its TLS handshake, normally for certificate-based HTTPS. |
 | **TLS passthrough** | Forwarding TLS traffic without decrypting it. This also describes the internal fallback route for unparseable TLS handshakes. |
 | **PKARR packet** | The signed object containing DNS records published through PKARR. Signing is implied by this term. |
 | **DNS records file** | The TOML file defining the complete record set to publish, normally `dns-records.toml`. |
@@ -27,3 +27,7 @@ and `pubky-tls-proxy` for the executable, package, and service.
 
 Keep literal commands, configuration keys, filenames, URLs, and dependency API
 names in their required spelling, including `pkarr` and `SignedPacket`.
+
+Use `pkarr` in configuration keys and snake_case identifiers, and `Pkarr` in Rust
+type names. The publishing subsystem covers both initial publication and periodic
+republishing; reserve `republish` for publishing an existing packet again.
