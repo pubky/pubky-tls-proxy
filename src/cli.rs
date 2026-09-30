@@ -6,11 +6,11 @@
 use clap::Parser;
 use std::{net::SocketAddr, path::PathBuf};
 
-/// A proxy that terminates Pubky TLS with a pkarr secret key and routes all other HTTP(S)
-/// traffic to a regular web server such as nginx.
+/// A proxy that terminates raw public key TLS with a secret key and routes HTTP(S)
+/// traffic to a web server such as nginx.
 ///
-/// Plain HTTP and decrypted Pubky TLS go to the HTTP backend. Regular HTTPS is passed through
-/// to the HTTPS backend without decrypting it. The pkarr packet of the public key is
+/// Plain HTTP and decrypted raw public key TLS go to the HTTP backend. Certificate-based HTTPS is passed through
+/// to the HTTPS backend without decrypting it. The PKARR packet for the Public Key Domain is
 /// republished periodically.
 ///
 /// A commented ~/.pubky-tls-proxy/config.toml is created on first run. Command line
@@ -23,7 +23,7 @@ pub struct Args {
     #[arg(long, value_name = "FILE")]
     pub config: Option<PathBuf>,
 
-    /// File containing the pkarr secret key in HEX format.
+    /// Secret key file containing 32 bytes as 64 hexadecimal characters.
     /// Created automatically if missing. Relative to the config file's directory. [default: secret]
     #[arg(long, value_name = "FILE")]
     pub secret_file: Option<PathBuf>,
@@ -32,12 +32,12 @@ pub struct Args {
     #[arg(long = "listen-addr", value_name = "ADDR")]
     pub listen_addrs: Vec<SocketAddr>,
 
-    /// Backend for plain HTTP and decrypted Pubky TLS traffic. [default: 127.0.0.1:6286]
+    /// Backend for plain HTTP and decrypted raw public key TLS traffic. [default: 127.0.0.1:6286]
     #[arg(long, alias = "backend-addr", value_name = "ADDR")]
     pub http_backend_addr: Option<SocketAddr>,
 
-    /// Backend for regular HTTPS traffic, which is forwarded still encrypted.
-    /// If not set, regular HTTPS connections are closed.
+    /// Backend for certificate-based HTTPS traffic, which is forwarded still encrypted.
+    /// If not set, certificate-based HTTPS connections are closed.
     #[arg(long, value_name = "ADDR")]
     pub https_backend_addr: Option<SocketAddr>,
 
@@ -53,11 +53,11 @@ pub struct Args {
     #[arg(long)]
     pub max_connections: Option<usize>,
 
-    /// Maximum seconds for a Pubky TLS handshake. [default: 10]
+    /// Maximum seconds for a raw public key TLS handshake. [default: 10]
     #[arg(long)]
     pub handshake_timeout_secs: Option<u64>,
 
-    /// Maximum seconds to connect to a backend and send its PROXY header. [default: 10]
+    /// Maximum seconds to connect to a backend and send its PROXY protocol header. [default: 10]
     #[arg(long)]
     pub backend_timeout_secs: Option<u64>,
 
@@ -65,7 +65,7 @@ pub struct Args {
     #[arg(long)]
     pub idle_timeout_secs: Option<u64>,
 
-    /// Disable publishing and republishing the pkarr packet.
+    /// Disable publishing and republishing the PKARR packet.
     #[arg(long)]
     pub no_republish: bool,
 
@@ -73,7 +73,7 @@ pub struct Args {
     #[arg(long, value_name = "SECONDS")]
     pub republish_interval_secs: Option<u64>,
 
-    /// File that keeps a copy of the pkarr packet, to republish it even if it disappeared
+    /// File that keeps a copy of the PKARR packet, to republish it even if it disappeared
     /// from the DHT and the relays. Relative to the config file's directory.
     /// [default: pkarr-packet.cache]
     #[arg(long, value_name = "FILE")]
@@ -84,7 +84,7 @@ pub struct Args {
     #[arg(long, value_name = "FILE")]
     pub dns_records_file: Option<PathBuf>,
 
-    /// Validate configuration, DNS records and an existing secret offline without creating a key or listeners.
+    /// Validate configuration, DNS records and an existing secret key offline without creating a key or listeners.
     #[arg(long)]
     pub check: bool,
 
@@ -96,7 +96,7 @@ pub struct Args {
     )]
     pub pkarr_bootstrap_nodes: Vec<String>,
 
-    /// Pkarr relay URL. Can be repeated. Replaces the default relays.
+    /// PKARR relay URL. Can be repeated. Replaces the default relays.
     #[arg(
         long = "pkarr-relay",
         value_name = "URL",
@@ -104,11 +104,11 @@ pub struct Args {
     )]
     pub pkarr_relays: Vec<String>,
 
-    /// Don't use the mainline DHT for republishing.
+    /// Don't use the Mainline DHT for publishing or republishing.
     #[arg(long)]
     pub no_pkarr_dht: bool,
 
-    /// Don't use pkarr relays for republishing.
+    /// Don't use PKARR relays for publishing or republishing.
     #[arg(long)]
     pub no_pkarr_relays: bool,
 }

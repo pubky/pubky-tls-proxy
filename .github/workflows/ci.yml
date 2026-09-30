@@ -27,6 +27,6 @@ jobs:
       - name: Lint
         run: cargo clippy --all-targets -- -D warnings
 
-      # Some tests talk to the real mainline DHT and pkarr relays.
+      # Some tests talk to the real Mainline DHT and PKARR relays.
       - name: Test
         run: cargo test

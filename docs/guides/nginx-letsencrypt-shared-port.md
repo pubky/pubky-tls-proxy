@@ -1,4 +1,4 @@
-# Share ports 80 and 443 between nginx and pubky-tls-proxy
+# Share ports 80 and 443 between nginx and Pubky TLS Proxy
 
 This is the alternative to the [simpler nginx and Let's Encrypt guide](nginx-letsencrypt.md), where raw public key TLS uses port 8443. Here, **certificate-based TLS and raw public key TLS share port 443**. Choose this if clients cannot reach port 8443. A browser or another application may support either or both connection types.
 
@@ -12,11 +12,11 @@ The proxy decrypts raw public key TLS but passes certificate-based HTTPS through
 
 ## Before you begin
 
-You need a server with `sudo` access, TCP ports **80 and 443** open to the public, and a domain whose A record points to your server. This guide calls that domain `example.com`: **replace it with yours in every file name, command, and configuration example**.
+You need a server with `sudo` access, TCP ports **80 and 443** open to the public, and a conventional DNS domain whose A record points to your server. This guide calls that domain `example.com`: **replace it with yours in every file name, command, and configuration example**.
 
 Have the server's public IPv4 address ready. The proxy generates your secret key on first startup and reuses it on later starts.
 
-Your domain's DNS record is for domain-based requests and Let's Encrypt. The proxy signs and publishes the records in `dns-records.toml` through pkarr, letting applications discover the server by its public key. This discovery is separate from TLS.
+Your conventional DNS domain's record is for requests to `example.com` and Let's Encrypt. The proxy builds a PKARR packet from `dns-records.toml`, signs and publishes it through PKARR, letting applications discover the server by its Public Key Domain. This discovery is separate from TLS.
 
 ## 1. Install nginx and certbot
 
@@ -79,9 +79,9 @@ sudo nginx -t
 sudo systemctl reload nginx
 ```
 
-## 3. Install pubky-tls-proxy
+## 3. Install Pubky TLS Proxy
 
-Download the prebuilt binary from the [releases page](https://github.com/pubky/pubky-tls-proxy/releases). This guide targets **v0.3.4**, which includes local DNS publishing.
+Download the prebuilt binary from the [releases page](https://github.com/pubky/pubky-tls-proxy/releases). This guide targets **v0.3.4**, which includes publishing DNS records from a local file.
 
 The commands below use **linux-amd64**. For a 64-bit ARM server, choose the matching archive on the releases page and replace the platform in the commands.
 
@@ -104,7 +104,7 @@ pubky-tls-proxy --version
 
 ## 4. Configure the proxy
 
-Run the proxy as your normal login user. Keep its configuration, secret, and packet cache together in `~/.pubky-tls-proxy/`. Create the directory without `sudo`:
+Run the proxy as your normal login user. Keep its configuration, secret key file, and packet cache together in `~/.pubky-tls-proxy/`. Create the directory without `sudo`:
 
 ```bash
 mkdir -p ~/.pubky-tls-proxy
@@ -128,7 +128,7 @@ https_backend_addr = "127.0.0.1:8443"
 records_file = "dns-records.toml"
 ```
 
-### Publish your Pubky address
+### Publish DNS records for your Public Key Domain
 
 Create the DNS records file next to the config. The `records_file` setting makes this file required:
 
@@ -152,7 +152,7 @@ target = "."
 port = 443
 ```
 
-`@` means your proxy's public key. In the HTTPS record, `target = "."` uses that same host, and `port = 443` tells clients to use the shared public port. Use 443 here, not nginx's internal port 8443.
+`@` means the apex of your Public Key Domain. In the HTTPS record, `target = "."` uses that same host, and `port = 443` tells clients to use the shared public port. Use 443 here, not nginx's internal port 8443.
 
 Validate the files as your normal user, without `sudo`:
 
@@ -160,7 +160,7 @@ Validate the files as your normal user, without `sudo`:
 pubky-tls-proxy --check
 ```
 
-Look for `Configuration and DNS records are valid`. On first setup, the check also reports that the secret is missing and will be generated at startup. On later checks, it validates the saved secret too. The check runs offline and creates no secret; starting the service generates the identity and publishes the records.
+Look for `Configuration and DNS records are valid`. On first setup, the check also reports that the secret key file is missing and will be generated at startup. On later checks, it validates the saved secret key too. The check runs offline and creates no secret key file; on first startup, the service generates a keypair, saves the secret key, and publishes the DNS records.
 
 ## 5. Start the proxy
 
@@ -205,9 +205,9 @@ sudo systemctl enable --now pubky-tls-proxy
 sudo journalctl -u pubky-tls-proxy -n 30 --no-pager
 ```
 
-Look for your public key, `Listening on 0.0.0.0:80`, and `Listening on 0.0.0.0:443`. For DNS publishing, look for `Managing 2 pkarr DNS records from ...`, followed by `Published local pkarr packet to DHT` or `Published local pkarr packet to relays`. Publishing may take a little while; check the log again if needed.
+Look for your public key, `Listening on 0.0.0.0:80`, and `Listening on 0.0.0.0:443`. For DNS publishing, look for `Managing 2 DNS records from ...`, followed by `Published local PKARR packet to DHT` or `Published local PKARR packet to relays`. Publishing may take a little while; check the log again if needed.
 
-The proxy creates `~/.pubky-tls-proxy/secret` with owner-only permissions on first startup. Back it up securely after the first successful start: losing it changes your Pubky identity. Keep using the same directory across updates.
+The proxy creates `~/.pubky-tls-proxy/secret` with owner-only permissions on first startup. Back it up securely after the first successful start to retain control of your Public Key Domain. Generating a replacement key creates a different Public Key Domain. Keep using the same directory across updates.
 
 ## 6. Set up certificate-based HTTPS
 
@@ -225,7 +225,7 @@ Now edit the nginx site again:
 sudo nano /etc/nginx/sites-available/example.com
 ```
 
-**Replace its entire contents** with the following. Replace **every** `example.com`, including in the certificate paths. nginx now terminates certificate-based HTTPS on localhost:8443; the second block redirects HTTP requests for your domain. Requests addressed to your Pubky identity use the public key as Host, so they aren't redirected.
+**Replace its entire contents** with the following. Replace **every** `example.com`, including in the certificate paths. nginx now terminates certificate-based HTTPS on localhost:8443; the second block redirects HTTP requests for your conventional DNS domain. Requests addressed to your Public Key Domain use that domain in the `Host` header, so they aren't redirected.
 
 ```nginx
 server {
@@ -284,7 +284,7 @@ To check raw public key TLS, use OpenSSL **3.2 or newer** (Debian 13 has it; Deb
 openssl s_client -connect example.com:443 -enable_server_rpk
 ```
 
-Look for `Server-to-client raw public key negotiated`. This doesn't verify that the key is yours; check it with a Pubky-capable browser or application. The proxy's public key appears in `sudo journalctl -u pubky-tls-proxy -n 30 --no-pager`, and you can inspect its packet at `https://pkarr.pubky.org/<your-public-key>`.
+Look for `Server-to-client raw public key negotiated`. This doesn't verify that the key is yours; check it with a browser or application supporting Public Key Domains and raw public key TLS. The proxy's public key appears in `sudo journalctl -u pubky-tls-proxy -n 30 --no-pager`, and you can inspect its PKARR packet at `https://pkarr.pubky.org/<your-public-key>`.
 
 ## Serve an app instead of static files
 
@@ -301,9 +301,9 @@ location / {
 
 Keep the `/.well-known/acme-challenge/` block in the second server block, so certificate renewals work.
 
-## Update your Pubky address
+## Update the DNS records for your Public Key Domain
 
-If the server's public IP changes, edit `~/.pubky-tls-proxy/dns-records.toml` and save it. The proxy checks the file every three seconds and publishes valid changes automatically; no restart is needed. It also republishes the records every hour to keep them available.
+If the server's public IP address changes, edit `~/.pubky-tls-proxy/dns-records.toml` and save it. Your Public Key Domain stays the same. The proxy checks the file every three seconds and publishes valid changes automatically; no restart is needed. It also republishes the PKARR packet every hour to keep the records available.
 
 If an edit is invalid, the proxy logs the error and keeps the last valid records until you fix the file. Clients may keep using old records until their TTL expires (300 seconds by default). Changes to `config.toml`, such as a new listen port, require a service restart.
 
@@ -311,7 +311,7 @@ If an edit is invalid, the proxy logs the error and keeps the last valid records
 
 - **The proxy can't bind port 80 or 443:** Something else uses it, often nginx's default site. Run `sudo ss -tlnp` and check that no nginx site listens on a public port.
 - **Raw public key TLS connections fail:** Check the A address and `port = 443` in `dns-records.toml`; clients may cache an old value until its TTL expires.
-- **DNS file errors:** Check that `~/.pubky-tls-proxy/dns-records.toml` exists and passes `pubky-tls-proxy --check` as your normal user. Keep `records_file = "dns-records.toml"` under `[pkarr]`. If you have changed publishing settings, make sure publishing is still enabled.
+- **DNS records file errors:** Check that `~/.pubky-tls-proxy/dns-records.toml` exists and passes `pubky-tls-proxy --check` as your normal user. Keep `records_file = "dns-records.toml"` under `[pkarr]`. If you have changed publishing settings, make sure publishing is still enabled.
 - **DHT errors, but publishing to relays succeeds:** If your network blocks DHT (UDP), add `bootstrap_nodes = []` to the existing `[pkarr]` section in `config.toml`. Restart the proxy. The relays publish to the DHT for you.
 - **`502 Bad Gateway`:** nginx must listen on `127.0.0.1:8080`. Check `sudo nginx -t` and `sudo systemctl status nginx`.
 - **Certificate-based HTTPS disconnects:** Check that nginx listens on `127.0.0.1:8443` with `ssl proxy_protocol` and that the proxy config names it as `https_backend_addr`.

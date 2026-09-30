@@ -56,8 +56,8 @@ pub async fn forward_plain_http(
     relay(&mut client, &mut backend_stream, limits.idle_timeout).await
 }
 
-/// Terminates Pubky TLS with `tls_acceptor` and forwards the decrypted HTTP to `backend`.
-pub async fn forward_pubky_tls(
+/// Terminates raw public key TLS with `tls_acceptor` and forwards the decrypted HTTP to `backend`.
+pub async fn forward_raw_public_key_tls(
     client: impl AsyncRead + AsyncWrite + Unpin,
     tls_acceptor: &TlsAcceptor,
     backend: Backend,
@@ -66,22 +66,28 @@ pub async fn forward_pubky_tls(
 ) -> Result<()> {
     let decrypted_client =
         match tokio::time::timeout(limits.handshake_timeout, tls_acceptor.accept(client)).await {
-            Ok(result) => result.context("Pubky TLS handshake failed")?,
+            Ok(result) => result.context("Raw public key TLS handshake failed")?,
             Err(_) => {
-                debug!("Pubky TLS handshake timed out for {}", addrs.client_addr);
+                debug!(
+                    "Raw public key TLS handshake timed out for {}",
+                    addrs.client_addr
+                );
                 return Ok(());
             }
         };
-    debug!("Pubky TLS handshake successful for {}", addrs.client_addr);
+    debug!(
+        "Raw public key TLS handshake successful for {}",
+        addrs.client_addr
+    );
 
     forward_plain_http(decrypted_client, backend, addrs, limits).await
 }
 
-/// Forwards a regular TLS connection to `backend` without decrypting it.
+/// Forwards a TLS passthrough connection to `backend` without decrypting it.
 ///
 /// If the backend is unreachable the connection is simply closed. There is no way to
 /// answer with an HTTP error, because only the backend can complete the TLS handshake.
-pub async fn forward_regular_tls(
+pub async fn forward_tls_passthrough(
     mut client: impl AsyncRead + AsyncWrite + Unpin,
     backend: Backend,
     addrs: ConnectionAddrs,

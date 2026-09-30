@@ -3,7 +3,7 @@
 # Runs the proxy as the unprivileged user `pubky-tls-proxy` with the config in
 # /etc/pubky-tls-proxy/config.toml. See docs/guides/nginx-letsencrypt.md.
 [Unit]
-Description=pubky-tls-proxy - routes Pubky TLS, HTTPS and HTTP to a web server
+Description=Pubky TLS Proxy - routes raw public key TLS, certificate-based HTTPS and plain HTTP to a web server
 Documentation=https://github.com/pubky/pubky-tls-proxy
 After=network-online.target nginx.service
 Wants=network-online.target
@@ -22,7 +22,7 @@ NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
 PrivateTmp=true
-# Writable /var/lib/pubky-tls-proxy for the pkarr packet cache.
+# Writable /var/lib/pubky-tls-proxy for the PKARR packet cache.
 StateDirectory=pubky-tls-proxy
 
 [Install]

@@ -34,7 +34,7 @@ const DEFAULT_REPUBLISH_INTERVAL_SECS: u64 = 60 * 60;
 const DEFAULT_PACKET_CACHE_FILE: &str = "pkarr-packet.cache";
 const DEFAULT_RECORDS_FILE: &str = "dns-records.toml";
 
-/// Same list as `mainline::rpc::DEFAULT_BOOTSTRAP_NODES` (mainline 8), which pkarr doesn't re-export.
+/// Same list as `mainline::rpc::DEFAULT_BOOTSTRAP_NODES` (`mainline` 8), which `pkarr` doesn't re-export.
 const DEFAULT_DHT_BOOTSTRAP_NODES: [&str; 4] = [
     "router.bittorrent.com:6881",
     "dht.transmissionbt.com:6881",
@@ -96,11 +96,11 @@ pub struct Settings {
     pub republish: Option<RepublishSettings>,
 }
 
-/// How to republish the pkarr packet. At least one network is enabled.
+/// How to publish and republish the PKARR packet. At least one network is enabled.
 #[derive(Debug)]
 pub struct RepublishSettings {
     pub interval: Duration,
-    /// Where the last known pkarr packet is kept, see `packet_cache.rs`.
+    /// Where the last known PKARR packet is kept, see `packet_cache.rs`.
     pub cache_file: PathBuf,
     /// Present when the operator owns the complete record set locally.
     pub records_file: Option<PathBuf>,
@@ -116,7 +116,7 @@ impl Settings {
     /// # Errors
     ///
     /// Fails if `--config` points to a missing file, the default config cannot be created,
-    /// the config file is invalid, or a pkarr network setting is unusable.
+    /// the config file is invalid, or a PKARR network setting is unusable.
     pub fn load(args: Args) -> Result<Self> {
         Self::load_with_home_dir(args, std::env::home_dir())
     }
@@ -340,7 +340,7 @@ fn republish_settings(
     let dht_bootstrap_nodes = if bootstrap_nodes.is_empty() {
         None
     } else if args.check {
-        // --check validates local input without contacting DNS or any pkarr network.
+        // --check validates local input without contacting DNS or any PKARR network.
         Some(Vec::new())
     } else {
         Some(resolve_bootstrap_nodes(&bootstrap_nodes)?)
@@ -425,7 +425,7 @@ fn parse_relay_urls(relays: &[String]) -> Result<Vec<Url>> {
     relays
         .iter()
         .map(|relay| {
-            Url::parse(relay).with_context(|| format!("Invalid pkarr relay URL {relay:?}"))
+            Url::parse(relay).with_context(|| format!("Invalid PKARR relay URL {relay:?}"))
         })
         .collect()
 }
@@ -828,7 +828,7 @@ mod tests {
         let error = home.load(args).unwrap_err();
 
         assert!(
-            error.to_string().contains("Invalid pkarr relay URL"),
+            error.to_string().contains("Invalid PKARR relay URL"),
             "{error}"
         );
     }

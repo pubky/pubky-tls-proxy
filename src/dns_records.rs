@@ -1,4 +1,4 @@
-//! User-owned DNS records. A valid file describes the complete pkarr packet.
+//! DNS records from a local file. A valid file describes the complete record set for a PKARR packet.
 
 use anyhow::{bail, ensure, Context, Result};
 use pkarr::{
@@ -104,7 +104,7 @@ impl DnsRecords {
         let now = Timestamp::now().as_u64();
         let timestamp = previous.map_or(now, |old| now.max(old.as_u64().saturating_add(1)));
         SignedPacket::new(keypair, &self.0, Timestamp::from(timestamp.to_be_bytes()))
-            .context("DNS records exceed pkarr's packet size limit or cannot be encoded")
+            .context("DNS records exceed PKARR's packet size limit or cannot be encoded")
     }
 
     pub fn len(&self) -> usize {

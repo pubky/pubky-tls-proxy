@@ -1,10 +1,12 @@
 //! The proxy: accepts connections on all listen addresses and routes each one by its traffic kind.
 //!
-//! | Incoming traffic | Handling                                     | Backend              |
-//! |------------------|----------------------------------------------|----------------------|
-//! | Plain HTTP       | forwarded as is, or rejected if disabled    | `http_backend_addr`  |
-//! | Pubky TLS        | TLS terminated with the pkarr keypair        | `http_backend_addr`  |
-//! | Regular HTTPS    | forwarded as is, the backend terminates TLS  | `https_backend_addr` |
+//! | Incoming traffic        | Handling                                    | Backend              |
+//! |-------------------------|---------------------------------------------|----------------------|
+//! | Plain HTTP              | forwarded as is, or rejected if disabled     | `http_backend_addr`  |
+//! | Raw public key TLS      | TLS terminated with the proxy's keypair      | `http_backend_addr`  |
+//! | Certificate-based HTTPS | forwarded as is, the backend terminates TLS  | `https_backend_addr` |
+//!
+//! Unparseable TLS handshakes also use the TLS passthrough route to the HTTPS backend.
 
 use crate::{
     forwarding::{self, Backend, ConnectionAddrs},
@@ -48,12 +50,12 @@ impl Default for ConnectionLimits {
 
 /// Everything needed to start a [`Proxy`].
 pub struct ProxyConfig {
-    /// Keypair whose public key Pubky TLS clients connect to.
+    /// Keypair used for raw public key TLS.
     pub keypair: Keypair,
     pub listen_addrs: Vec<SocketAddr>,
-    /// Receives plain HTTP and decrypted Pubky TLS traffic.
+    /// Receives plain HTTP and decrypted raw public key TLS traffic.
     pub http_backend_addr: SocketAddr,
-    /// Receives regular HTTPS traffic. Without it, regular HTTPS connections are closed.
+    /// Receives TLS passthrough traffic. Without it, those connections are closed.
     pub https_backend_addr: Option<SocketAddr>,
     /// Whether incoming plain HTTP is forwarded to the HTTP backend.
     pub plain_http: bool,
@@ -64,7 +66,7 @@ pub struct ProxyConfig {
 
 /// Where each kind of traffic goes. Shared by all connections.
 struct Routes {
-    pubky_tls_acceptor: TlsAcceptor,
+    raw_public_key_tls_acceptor: TlsAcceptor,
     http_backend: Backend,
     https_backend: Option<Backend>,
     plain_http: bool,
@@ -118,7 +120,7 @@ impl Proxy {
             .collect::<std::io::Result<Vec<_>>>()?;
 
         let routes = Arc::new(Routes {
-            pubky_tls_acceptor: TlsAcceptor::from(Arc::new(
+            raw_public_key_tls_acceptor: TlsAcceptor::from(Arc::new(
                 config.keypair.to_rpk_rustls_server_config(),
             )),
             http_backend: Backend {
@@ -183,7 +185,7 @@ impl Proxy {
         &self.listen_addrs
     }
 
-    /// Public key Pubky TLS clients connect to.
+    /// Public key used for raw public key TLS and naming the Public Key Domain.
     pub fn public_key(&self) -> PublicKey {
         self.public_key.clone()
     }
@@ -297,24 +299,27 @@ async fn handle_connection(
             info!("{client_addr}: plain HTTP -> {}", routes.http_backend.addr);
             forwarding::forward_plain_http(client, routes.http_backend, addrs, limits).await
         }
-        IncomingTraffic::PubkyTls => {
-            info!("{client_addr}: Pubky TLS -> {}", routes.http_backend.addr);
-            forwarding::forward_pubky_tls(
+        IncomingTraffic::RawPublicKeyTls => {
+            info!(
+                "{client_addr}: raw public key TLS -> {}",
+                routes.http_backend.addr
+            );
+            forwarding::forward_raw_public_key_tls(
                 client,
-                &routes.pubky_tls_acceptor,
+                &routes.raw_public_key_tls_acceptor,
                 routes.http_backend,
                 addrs,
                 limits,
             )
             .await
         }
-        IncomingTraffic::RegularTls => {
+        IncomingTraffic::TlsPassthrough => {
             let Some(https_backend) = routes.https_backend else {
-                debug!("{client_addr}: regular HTTPS rejected, no HTTPS backend configured");
+                debug!("{client_addr}: TLS passthrough rejected, no HTTPS backend configured");
                 return Ok(());
             };
-            info!("{client_addr}: regular HTTPS -> {}", https_backend.addr);
-            forwarding::forward_regular_tls(client, https_backend, addrs, limits).await
+            info!("{client_addr}: TLS passthrough -> {}", https_backend.addr);
+            forwarding::forward_tls_passthrough(client, https_backend, addrs, limits).await
         }
     }
 }

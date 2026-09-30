@@ -43,7 +43,7 @@ async fn main() -> Result<()> {
             Some(keypair) => keypair,
             None => {
                 info!(
-                    "Secret file {:?} is missing; startup will generate it",
+                    "Secret key file {:?} is missing; startup will generate it",
                     settings.secret_file
                 );
                 Keypair::random()
@@ -79,7 +79,7 @@ async fn main() -> Result<()> {
     let republisher = match &settings.republish {
         Some(republish) => Some(start_republisher(&keypair, republish, records)?),
         None => {
-            info!("Republishing the pkarr packet: off");
+            info!("PKARR publishing and republishing: off");
             None
         }
     };
@@ -152,10 +152,10 @@ fn log_proxy_settings(proxy: &Proxy, settings: &Settings) {
     } else {
         info!("Plain HTTP -> rejected");
     }
-    info!("Pubky TLS -> {}", settings.http_backend_addr);
+    info!("Raw public key TLS -> {}", settings.http_backend_addr);
     match settings.https_backend_addr {
-        Some(https_backend_addr) => info!("Regular HTTPS -> {https_backend_addr}"),
-        None => info!("Regular HTTPS -> rejected, no HTTPS backend configured"),
+        Some(https_backend_addr) => info!("Certificate-based HTTPS -> {https_backend_addr}"),
+        None => info!("Certificate-based HTTPS -> rejected, no HTTPS backend configured"),
     }
     let proxy_protocol_state = if settings.send_proxy_protocol {
         "on"
@@ -187,10 +187,10 @@ fn start_republisher(
         None => info!("Republishing to relays: off"),
     }
     info!(
-        "Republishing the pkarr packet every {}s",
+        "Republishing the PKARR packet every {}s",
         republish.interval.as_secs()
     );
-    info!("Caching the pkarr packet in {:?}", republish.cache_file);
+    info!("Caching the PKARR packet in {:?}", republish.cache_file);
     let cache = PacketCache::new(republish.cache_file.clone(), keypair.public_key());
 
     Ok(match (records, &republish.records_file) {

@@ -6,6 +6,11 @@ All notable changes are documented here. The format is based on
 
 ## [Unreleased]
 
+### Changed
+- Standardize terminology across documentation, CLI help, configuration comments,
+  logs, and internal names: Public Key Domain, raw public key TLS,
+  certificate-based HTTPS, secret key, and PKARR packet. Add a terminology reference.
+
 ## [0.3.4] - 2026-09-30
 
 ### Changed
@@ -18,8 +23,8 @@ All notable changes are documented here. The format is based on
   with compatible installation instructions, validation, and local publishing checks.
 
 ### Added
-- Publish a complete pkarr DNS packet from optional `dns-records.toml`, automatically reload
-  edits, and validate records offline with `--check`. Existing external-packet republishing
+- Publish a complete PKARR packet from optional `dns-records.toml`, automatically reload
+  edits, and validate records offline with `--check`. Existing external-packet mode
   remains the default when no records file is present.
 - Create a commented starter `~/.pubky-tls-proxy/config.toml` on first startup,
   without overwriting an existing config.
@@ -30,7 +35,7 @@ All notable changes are documented here. The format is based on
 
 ### Security
 - Return a generic 502 response without backend addresses or OS errors; keep full diagnostics
-  in server logs for plain HTTP and Pubky TLS backend failures.
+  in server logs for plain HTTP and raw public key TLS backend failures.
 
 ### Fixed
 - Drain active connections during shutdown for up to five seconds, then cancel remaining
@@ -44,12 +49,12 @@ All notable changes are documented here. The format is based on
 ## [0.3.2] - 2026-09-28
 
 ### Security
-- Limit concurrent connections across listeners, bound Pubky TLS handshakes and backend setup,
+- Limit concurrent connections across listeners, bound raw public key TLS handshakes and backend setup,
   and close idle connections to prevent stalled clients from exhausting proxy resources.
 
 ### Added
-- `plain_http = false` / `--no-plain-http` to reject incoming plain HTTP on a Pubky-only port
-  without affecting decrypted Pubky TLS; rejected protocol traffic is logged at debug level.
+- `plain_http = false` / `--no-plain-http` to reject incoming plain HTTP on a raw public key TLS-only port
+  without affecting decrypted raw public key TLS; rejected protocol traffic is logged at debug level.
 - Guide: [set up the proxy with nginx and Let's Encrypt](docs/guides/nginx-letsencrypt.md),
   with the proxy on its own port (8443).
 - Guide: [share ports 80 and 443 between nginx and the proxy](docs/guides/nginx-letsencrypt-shared-port.md).
@@ -65,7 +70,7 @@ All notable changes are documented here. The format is based on
 ## [0.3.1] - 2026-09-28
 
 ### Added
-- Cache the pkarr packet on disk (`pkarr-packet.cache`, `--packet-cache-file`), so it can
+- Cache the PKARR packet on disk (`pkarr-packet.cache`, `--packet-cache-file`), so it can
   still be republished if it disappears from the DHT and the relays.
 
 ### Changed
@@ -75,7 +80,7 @@ All notable changes are documented here. The format is based on
 ## [0.3.0] - 2026-09-28
 
 ### Added
-- Republish the pkarr packet every hour (`--no-republish`, `--republish-interval-secs`).
+- Republish the PKARR packet every hour (`--no-republish`, `--republish-interval-secs`).
 - Configurable DHT bootstrap nodes and relays (`--pkarr-bootstrap-node`, `--pkarr-relay`,
   `--no-pkarr-dht`, `--no-pkarr-relays`).
 - Config file `~/.pubky-tls-proxy/config.toml`, or `--config <FILE>`.
@@ -84,13 +89,13 @@ All notable changes are documented here. The format is based on
 
 ### Changed
 - **Breaking:** a relative `--secret-file` is resolved against the config directory.
-- Updated pkarr to 8.0.2.
+- Updated the `pkarr` crate to 8.0.2.
 - No ANSI colours in logs when stdout isn't a terminal.
 
 ## [0.2.0] - 2026-09-28
 
 ### Added
-- Route plain HTTP, Pubky TLS and regular HTTPS on one port (`--https-backend-addr`).
+- Route plain HTTP, raw public key TLS and certificate-based HTTPS on one port (`--https-backend-addr`).
 - PROXY protocol v1 header to the backends (`--no-proxy-protocol`).
 - Repeatable `--listen-addr`.
 - `502 Bad Gateway` when the backend is unreachable.

@@ -195,7 +195,7 @@ async fn disabled_plain_http_is_closed_without_contacting_backend() -> Result<()
 }
 
 #[tokio::test]
-async fn regular_https_is_passed_through_unchanged_to_https_backend() -> Result<()> {
+async fn certificate_based_https_is_passed_through_unchanged_to_https_backend() -> Result<()> {
     let http_backend = start_http_echo_backend().await?;
     let client_hello = x509_client_hello("example.com");
     let https_backend = RecordingBackend::start().await?;
@@ -227,7 +227,7 @@ async fn regular_https_is_passed_through_unchanged_to_https_backend() -> Result<
 #[tokio::test]
 async fn client_hanging_up_before_sending_anything_is_not_a_failure() -> Result<()> {
     let routes = Routes {
-        pubky_tls_acceptor: TlsAcceptor::from(Arc::new(
+        raw_public_key_tls_acceptor: TlsAcceptor::from(Arc::new(
             Keypair::random().to_rpk_rustls_server_config(),
         )),
         http_backend: Backend {
@@ -255,7 +255,7 @@ async fn client_hanging_up_before_sending_anything_is_not_a_failure() -> Result<
 }
 
 #[tokio::test]
-async fn regular_https_without_https_backend_is_closed() -> Result<()> {
+async fn certificate_based_https_without_https_backend_is_closed() -> Result<()> {
     let http_backend = start_http_echo_backend().await?;
     let proxy = start_proxy(http_backend, None, true).await?;
 
@@ -270,7 +270,7 @@ async fn regular_https_without_https_backend_is_closed() -> Result<()> {
 }
 
 #[tokio::test]
-async fn stalled_pubky_handshake_releases_its_connection_slot() -> Result<()> {
+async fn stalled_raw_public_key_tls_handshake_releases_its_connection_slot() -> Result<()> {
     let backend = start_http_echo_backend().await?;
     let proxy = Proxy::start(ProxyConfig {
         limits: ConnectionLimits {
@@ -339,9 +339,9 @@ async fn connection_limit_is_shared_across_listeners() -> Result<()> {
     proxy.shutdown(None).await
 }
 
-/// Uses the real Pubky client stack (pkarr + reqwest), so it needs access to the mainline DHT.
+/// Uses PKARR discovery and raw public key TLS through reqwest, requiring Mainline DHT access.
 #[tokio::test]
-async fn pubky_tls_is_terminated_and_forwarded_to_http_backend() -> Result<()> {
+async fn raw_public_key_tls_is_terminated_and_forwarded_to_http_backend() -> Result<()> {
     let keypair = Keypair::random();
     let http_backend = start_http_echo_backend().await?;
     let proxy = Proxy::start(ProxyConfig {
@@ -351,7 +351,7 @@ async fn pubky_tls_is_terminated_and_forwarded_to_http_backend() -> Result<()> {
     })
     .await?;
     let proxy_port = proxy.listen_addrs()[0].port();
-    let client = pubky_http_client_for(&keypair, proxy_port).await?;
+    let client = public_key_domain_http_client_for(&keypair, proxy_port).await?;
 
     let response = client
         .post(format!(
@@ -374,9 +374,9 @@ async fn pubky_tls_is_terminated_and_forwarded_to_http_backend() -> Result<()> {
     proxy.shutdown(None).await
 }
 
-/// Uses the real Pubky client stack (pkarr + reqwest), so it needs access to the mainline DHT.
+/// Uses PKARR discovery and raw public key TLS through reqwest, requiring Mainline DHT access.
 #[tokio::test]
-async fn pubky_tls_with_backend_down_gets_bad_gateway() -> Result<()> {
+async fn raw_public_key_tls_with_backend_down_gets_bad_gateway() -> Result<()> {
     let keypair = Keypair::random();
     let proxy = Proxy::start(ProxyConfig {
         keypair: keypair.clone(),
@@ -384,7 +384,7 @@ async fn pubky_tls_with_backend_down_gets_bad_gateway() -> Result<()> {
     })
     .await?;
     let proxy_port = proxy.listen_addrs()[0].port();
-    let client = pubky_http_client_for(&keypair, proxy_port).await?;
+    let client = public_key_domain_http_client_for(&keypair, proxy_port).await?;
 
     let response = client
         .post(format!(
@@ -448,8 +448,11 @@ fn unused_localhost_addr() -> SocketAddr {
     SocketAddr::from(([127, 0, 0, 1], port))
 }
 
-/// Publishes the proxy's address for `keypair` and returns a Pubky-capable HTTP client.
-async fn pubky_http_client_for(keypair: &Keypair, proxy_port: u16) -> Result<reqwest::Client> {
+/// Publishes the proxy's address for `keypair` and returns an HTTP client supporting Public Key Domains.
+async fn public_key_domain_http_client_for(
+    keypair: &Keypair,
+    proxy_port: u16,
+) -> Result<reqwest::Client> {
     let root_name = Name::new(".")?;
     let mut svcb = SVCB::new(0, root_name.clone());
     svcb.set_port(proxy_port);
@@ -511,8 +514,8 @@ async fn start_http_echo_backend() -> Result<SocketAddr> {
     Ok(addr)
 }
 
-/// Reads one HTTP request, optionally preceded by a PROXY header line.
-/// Returns the PROXY header (without line ending) and the request body.
+/// Reads one HTTP request, optionally preceded by a PROXY protocol header line.
+/// Returns the PROXY protocol header (without line ending) and the request body.
 async fn read_http_request(stream: &mut TcpStream) -> (Option<String>, String) {
     let mut received = Vec::new();
     let mut chunk = [0u8; 4096];
