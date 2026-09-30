@@ -6,6 +6,8 @@ All notable changes are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.3.4] - 2026-09-30
+
 ### Added
 - Publish a complete pkarr DNS packet from optional `dns-records.toml`, automatically reload
   edits, and validate records offline with `--check`. Existing external-packet republishing
@@ -94,7 +96,8 @@ All notable changes are documented here. The format is based on
 
 - First release candidate.
 
-[Unreleased]: https://github.com/pubky/pubky-tls-proxy/compare/v0.3.3...HEAD
+[Unreleased]: https://github.com/pubky/pubky-tls-proxy/compare/v0.3.4...HEAD
+[0.3.4]: https://github.com/pubky/pubky-tls-proxy/compare/v0.3.3...v0.3.4
 [0.3.3]: https://github.com/pubky/pubky-tls-proxy/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/pubky/pubky-tls-proxy/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/pubky/pubky-tls-proxy/compare/v0.3.0...v0.3.1
