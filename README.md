@@ -23,10 +23,10 @@ stays the same.
 
 ## Getting started
 
-The guides in this checkout use the unreleased configuration schema and explain how
-to install a binary built from the same revision. For a prebuilt binary, use the
-[latest release](https://github.com/pubky/pubky-tls-proxy/releases/latest/) and the
-documentation at its matching tag. Choose a setup guide:
+Download a binary for your platform from the
+[latest release](https://github.com/pubky/pubky-tls-proxy/releases/latest/), then choose
+a setup guide. When upgrading from 0.3.x, first follow the
+[configuration migration guide](docs/configuration-migration.md).
 
 - [Use a separate port for raw public key TLS](docs/guides/nginx-letsencrypt.md) (recommended).
   This Ubuntu and Debian guide leaves nginx on ports 80 and 443 and runs the proxy on

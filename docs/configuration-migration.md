@@ -1,6 +1,6 @@
-# Configuration migration
+# Migrating to 0.4.0
 
-These **unreleased breaking changes** rename CLI options and configuration keys.
+Version **0.4.0 introduces breaking changes** to CLI options and configuration keys.
 They do not change routing, key formats, default file locations, or publishing behavior.
 The old names are rejected rather than retained as aliases.
 

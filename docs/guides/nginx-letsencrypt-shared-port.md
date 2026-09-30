@@ -81,16 +81,23 @@ sudo systemctl reload nginx
 
 ## 3. Install Pubky TLS Proxy
 
-This guide uses the **unreleased configuration schema**. Build from the same source
-revision as this guide using a stable Rust toolchain. The published v0.3.4 binary
-does not accept the new names; its matching guide is available
-[here](https://github.com/pubky/pubky-tls-proxy/blob/v0.3.4/docs/guides/nginx-letsencrypt-shared-port.md).
+Download the prebuilt binary from the [releases page](https://github.com/pubky/pubky-tls-proxy/releases). This guide targets **v0.4.0**, which uses the configuration names shown below.
 
-From your repository checkout on the server:
+The commands below use **linux-amd64**. For a 64-bit ARM server, choose the matching archive on the releases page and replace the platform in the commands.
 
 ```bash
-cargo build --release
-sudo cp target/release/pubky-tls-proxy /usr/local/bin/pubky-tls-proxy
+mkdir -p ~/pubky-tls-proxy-download
+cd ~/pubky-tls-proxy-download
+curl -fLO https://github.com/pubky/pubky-tls-proxy/releases/download/v0.4.0/pubky-tls-proxy-linux-amd64-v0.4.0.tar.gz
+curl -fLO https://github.com/pubky/pubky-tls-proxy/releases/download/v0.4.0/SHA256SUMS
+sha256sum --ignore-missing -c SHA256SUMS
+```
+
+The checksum must print `OK`. Extract and install the binary:
+
+```bash
+tar -xzf pubky-tls-proxy-linux-amd64-v0.4.0.tar.gz
+sudo cp pubky-tls-proxy-linux-amd64-v0.4.0/pubky-tls-proxy /usr/local/bin/pubky-tls-proxy
 sudo chmod 755 /usr/local/bin/pubky-tls-proxy
 pubky-tls-proxy --version
 ```
