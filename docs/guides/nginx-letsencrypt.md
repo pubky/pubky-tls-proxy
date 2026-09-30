@@ -119,23 +119,23 @@ Enter your email address, accept the terms, and choose to redirect HTTP to HTTPS
 
 ## 4. Install pubky-tls-proxy
 
-Download the prebuilt binary from the [releases page](https://github.com/pubky/pubky-tls-proxy/releases). This guide targets **v0.4.0**, which includes local DNS publishing.
+Download the prebuilt binary from the [releases page](https://github.com/pubky/pubky-tls-proxy/releases). This guide targets **v0.3.4**, which includes local DNS publishing.
 
 The commands below use **linux-amd64**. For a 64-bit ARM server, choose the matching archive on the releases page and replace the platform in the commands.
 
 ```bash
 mkdir -p ~/pubky-tls-proxy-download
 cd ~/pubky-tls-proxy-download
-curl -fLO https://github.com/pubky/pubky-tls-proxy/releases/download/v0.4.0/pubky-tls-proxy-linux-amd64-v0.4.0.tar.gz
-curl -fLO https://github.com/pubky/pubky-tls-proxy/releases/download/v0.4.0/SHA256SUMS
+curl -fLO https://github.com/pubky/pubky-tls-proxy/releases/download/v0.3.4/pubky-tls-proxy-linux-amd64-v0.3.4.tar.gz
+curl -fLO https://github.com/pubky/pubky-tls-proxy/releases/download/v0.3.4/SHA256SUMS
 sha256sum --ignore-missing -c SHA256SUMS
 ```
 
 The checksum must print `OK`. Extract and install the binary:
 
 ```bash
-tar -xzf pubky-tls-proxy-linux-amd64-v0.4.0.tar.gz
-sudo cp pubky-tls-proxy-linux-amd64-v0.4.0/pubky-tls-proxy /usr/local/bin/pubky-tls-proxy
+tar -xzf pubky-tls-proxy-linux-amd64-v0.3.4.tar.gz
+sudo cp pubky-tls-proxy-linux-amd64-v0.3.4/pubky-tls-proxy /usr/local/bin/pubky-tls-proxy
 sudo chmod 755 /usr/local/bin/pubky-tls-proxy
 pubky-tls-proxy --version
 ```
