@@ -50,8 +50,6 @@ a setup guide.
 You will need:
 
 - A web server or HTTP service for the proxy to forward requests to.
-- A configuration file and secret key prepared with `init` or your deployment tooling.
-  Startup requires both files. Use `--secret-key-file` to select an existing key.
 
 ## How it works
 
