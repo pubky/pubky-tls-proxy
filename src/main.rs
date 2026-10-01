@@ -9,6 +9,7 @@ mod cli;
 mod config;
 mod dns_records;
 mod forwarding;
+mod init;
 mod packet_cache;
 mod prefixed_stream;
 mod proxy;
@@ -28,41 +29,30 @@ const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    init_logging();
-
     let args = cli::Args::parse();
+    if let Some(cli::Command::Init(init_args)) = &args.command {
+        init_logging("warn");
+        return init::run(init_args).await;
+    }
+    init_logging(DEFAULT_LOG_FILTER);
     let check = args.check;
     let settings = Settings::load(args)?;
+    let keypair = secret::check_keypair(&settings.secret_key_file)?.with_context(|| {
+        format!("Secret key file {:?} does not exist. Run pubky-tls-proxy init --directory {:?} or supply an existing key with --secret-key-file.", settings.secret_key_file, settings.config_file.parent().unwrap_or(std::path::Path::new(".")))
+    })?;
     let records = settings
         .dns_records_file
         .as_ref()
         .map(|path| dns_records::DnsRecords::load(path))
         .transpose()?;
-    if check {
-        let keypair = match secret::check_keypair(&settings.secret_key_file)? {
-            Some(keypair) => keypair,
-            None => {
-                info!(
-                    "Secret key file {:?} is missing; startup will generate it",
-                    settings.secret_key_file
-                );
-                Keypair::random()
-            }
-        };
-        if let Some(records) = &records {
-            records.sign(&keypair, None)?;
-        }
-        info!("Configuration and DNS records are valid");
-        return Ok(());
-    }
-    match &settings.config_file {
-        Some(config_file) => info!("Using config file {config_file:?}"),
-        None => info!("No config file found, using command line arguments and defaults"),
-    }
-    let keypair = secret::load_or_create_keypair(&settings.secret_key_file)?;
     if let Some(records) = &records {
         records.sign(&keypair, None)?;
     }
+    if check {
+        info!("Configuration and DNS records are valid");
+        return Ok(());
+    }
+    info!("Using config file {:?}", settings.config_file);
 
     let proxy = Proxy::start(ProxyConfig {
         keypair: keypair.clone(),
@@ -131,11 +121,11 @@ async fn wait_for_shutdown_signal() -> Result<()> {
 const DEFAULT_LOG_FILTER: &str = "info,rustls=error";
 
 /// Logs according to `RUST_LOG` (e.g. `RUST_LOG=pubky_tls_proxy=debug`), or
-/// [`DEFAULT_LOG_FILTER`] if it isn't set.
+/// the command's default filter if it isn't set. Setup hides routine logs by default.
 /// Colours are only used on a terminal, so they don't end up in e.g. the systemd journal.
-fn init_logging() {
+fn init_logging(default_filter: &str) {
     let filter =
-        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(DEFAULT_LOG_FILTER));
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default_filter));
     tracing_subscriber::fmt()
         .with_env_filter(filter)
         .with_ansi(std::io::stdout().is_terminal())

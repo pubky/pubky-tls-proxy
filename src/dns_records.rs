@@ -54,7 +54,12 @@ impl DnsRecords {
     pub fn load(path: &Path) -> Result<Self> {
         let contents = fs::read_to_string(path)
             .with_context(|| format!("Cannot read DNS records file {path:?}"))?;
-        let file: RecordsFile = toml::from_str(&contents)
+        Self::parse(&contents, path)
+    }
+
+    /// Validate file contents before persisting them. `path` identifies the source in diagnostics.
+    pub fn parse(contents: &str, path: &Path) -> Result<Self> {
+        let file: RecordsFile = toml::from_str(contents)
             .with_context(|| format!("Invalid DNS records file {path:?}"))?;
         ensure!(
             !file.records.is_empty(),

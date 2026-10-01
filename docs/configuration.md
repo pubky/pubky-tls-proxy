@@ -4,9 +4,6 @@ Every setting can be given on the command line or in a config file. Command line
 arguments override the config file, and the config file overrides the defaults.
 Run `pubky-tls-proxy --help` for all arguments.
 
-Version 0.4.0 renames several options and consolidates PKARR settings. See the
-[migration guide](configuration-migration.md) when upgrading from 0.3.x.
-
 ```bash
 pubky-tls-proxy [--config <FILE>] [--secret-key-file <FILE>] [--listen-addr <ADDR>]... [--http-backend-addr <ADDR>] [--tls-passthrough-backend-addr <ADDR>] [--no-plain-http] [--no-proxy-protocol] ...
 ```
@@ -14,7 +11,7 @@ pubky-tls-proxy [--config <FILE>] [--secret-key-file <FILE>] [--listen-addr <ADD
 ## Arguments
 
 - `--config`: Config file to use instead of `~/.pubky-tls-proxy/config.toml`. Must exist.
-- `--secret-key-file`: Secret key file containing 32 bytes as 64 hexadecimal characters. Defaults to `secret` in the config directory. Created automatically if missing.
+- `--secret-key-file`: Required secret key file containing 32 bytes as 64 hexadecimal characters. Defaults to `secret` in the config directory. Only `init` creates it.
 - `--listen-addr`: Address to listen on. Can be repeated, e.g. for ports 80 and 443 [default: 0.0.0.0:8443].
 - `--http-backend-addr`: Backend for plain HTTP and decrypted raw public key TLS traffic [default: 127.0.0.1:6286].
 - `--tls-passthrough-backend-addr`: Backend for encrypted TLS traffic, including certificate-based HTTPS and unparseable TLS handshakes. If it isn't set, TLS passthrough connections are closed.
@@ -25,27 +22,28 @@ pubky-tls-proxy [--config <FILE>] [--secret-key-file <FILE>] [--listen-addr <ADD
 - `--backend-setup-timeout-secs`: Maximum time to connect to a backend and send its PROXY protocol header [default: 10].
 - `--idle-timeout-secs`: Close an established connection after this many seconds without data transfer in either direction [default: 300]. Active connections have no maximum lifetime.
 - `--no-pkarr-publish`: Disable PKARR publishing and republishing.
+- `--pkarr-mode`: `local-records` (default) or `external-packet`. CLI overrides `[pkarr] mode`.
 - `--pkarr-republish-interval-secs`: Seconds between two republish runs [default: 3600].
 - `--pkarr-packet-cache-file`: Where the [packet cache](#packet-cache) is kept [default: `pkarr-packet.cache` in the config directory].
 - `--pkarr-dht-bootstrap-node`: Mainline DHT bootstrap node (`host:port`). Can be repeated. Replaces the default bootstrap nodes.
 - `--pkarr-relay-url`: PKARR relay URL. Can be repeated. Replaces the default relays.
 - `--no-pkarr-dht` / `--no-pkarr-relays`: Don't publish or republish to the DHT / to relays.
-- `--dns-records-file`: Use this TOML file as the complete DNS record set for the PKARR packet. The default `dns-records.toml` beside the config is used if present.
-- `--check`: Validate configuration, DNS records, and an existing secret key offline, without creating a key, starting listeners, or publishing. A missing secret key is reported as pending generation at startup; malformed or unreadable secret key files are errors.
+- `--dns-records-file`: Use this TOML file as the complete DNS record set for the PKARR packet. Local-records mode requires it; the default is `dns-records.toml` beside the config. Conflicts with external-packet mode.
+- `--check`: Validate the same required files as startup, offline, without creating files, starting listeners, or publishing. Missing or invalid required files are errors. Disabled publishing and external-packet mode need no DNS records file.
 
 Relative paths are resolved against the directory of the config file, both in the file and on the command line. By default that's `~/.pubky-tls-proxy/`. So `--secret-key-file secret` means `~/.pubky-tls-proxy/secret`.
 
 ## Config file
 
-On first run, the proxy creates a commented starter file at
-`~/.pubky-tls-proxy/config.toml`. Edit it to customize the proxy; it is never
-overwritten on later starts. The proxy reads it automatically. Use `--config <FILE>`
-to read another, existing file instead (no file is created at that path). All keys
+Run `init` to create a commented starter file at
+`~/.pubky-tls-proxy/config.toml`. Edit it to customize the proxy; startup and `--check`
+require it and never create files. Use `--config <FILE>`
+to read another, existing file instead. All keys
 are optional. Unknown keys are an error. The generated file is also available as
 [`config.example.toml`](../config.example.toml). This example shows the defaults:
 
 ```toml
-# Optional. Created if missing. Relative to this file's directory.
+# Required file. Created by init. Relative to this file's directory.
 secret_key_file = "secret"
 listen_addrs = ["0.0.0.0:8443"]
 http_backend_addr = "127.0.0.1:6286"
@@ -59,7 +57,8 @@ idle_timeout_secs = 300
 
 [pkarr]
 publish = true
-# dns_records_file = "dns-records.toml" # optional; auto-detected if present
+mode = "local-records"
+dns_records_file = "dns-records.toml" # required in local-records mode
 republish_interval_secs = 3600
 packet_cache_file = "pkarr-packet.cache"
 # A list replaces the defaults. An empty list disables that network.
@@ -71,13 +70,79 @@ The command line can only switch things off (`--no-...`). If the config file say
 
 To dedicate a listen port to raw public key TLS, set `plain_http = false` and leave `tls_passthrough_backend_addr` unset. In a shared-port setup with HTTP redirects or Let's Encrypt HTTP-01 challenges, keep plain HTTP enabled and handle those requests in the backend.
 
+## Initialization
+
+`init` is available in the next release; the existing manual setup instructions also
+work with v0.4.0.
+
+```sh
+pubky-tls-proxy init
+```
+
+Setup writes starter files without prompts or a terminal requirement. It prepares
+`config.toml`, `secret`, and `dns-records.toml` in `~/.pubky-tls-proxy/`, using a
+detected public IPv4 and port `8443` for A + HTTPS records. These defaults suit a
+typical public-server setup. It never starts listeners, contacts PKARR networks,
+or publishes records. Review the IP, port, and backend settings before starting.
+The completion summary lists the files and points to `http_backend_addr`, your
+current backend address, and the DNS endpoint. Reruns mark existing files as kept
+without claiming they contain newly generated defaults. Routine internal logs are
+hidden during setup; use `RUST_LOG=info` or `RUST_LOG=debug` for diagnostics.
+
+Address detection queries `https://api.ipify.org`, with
+`https://ipv4.icanhazip.com` as a fallback, using direct IPv4 HTTPS connections.
+Each request has a three-second timeout, with a six-second overall limit.
+The detected address may need editing: outbound NAT, CGNAT, and load balancers may use a
+different address from the one clients should connect to. Detection does not test
+inbound reachability. If detection fails, no setup files are created; rerun with
+`--public-ip YOUR_PUBLIC_IPV4`. `--public-ip` skips
+detection. Ensure the advertised TCP port reaches the proxy.
+
+To override the starter address or port:
+
+```sh
+pubky-tls-proxy init --public-ip YOUR_PUBLIC_IPV4
+# Shared-port deployment:
+pubky-tls-proxy init --public-ip YOUR_PUBLIC_IPV4 --port 443
+# Custom configuration directory:
+pubky-tls-proxy init --directory /path/to/proxy --public-ip YOUR_PUBLIC_IPV4
+```
+
+Replace `YOUR_PUBLIC_IPV4` with a globally routable IPv4 address. The same prompt-free
+flow works in scripts; an explicit address avoids relying on an external detection service.
+`--port` changes the advertised port, not the listeners in `config.toml`.
+Edit listener and backend settings to match your deployment before starting.
+
+Existing files are validated and never overwritten. If `config.toml` already
+selects custom secret or DNS records paths, setup uses those paths, resolving them
+against the configuration directory. Unlike normal startup, `init` can create a
+missing explicitly selected DNS records file. Rerunning setup fills in missing
+files; `--public-ip` and `--port` do not modify an existing records file. Invalid
+existing files require manual correction. A write failure can leave some files
+created; rerun after fixing the problem.
+For an existing external-packet configuration or disabled publishing, `init`
+prepares only the config and key; it skips IP detection and local records.
+
+Review the records, then validate and start:
+
+```sh
+pubky-tls-proxy --check
+pubky-tls-proxy
+```
+
+For a custom directory, pass `--config /path/to/proxy/config.toml` to both commands.
+Normal startup publishes the reviewed file unless publishing is disabled. Changes
+to the address require editing `dns-records.toml`; setup does not implement dynamic
+DNS. Missing required files make startup fail with instructions to run `init`.
+External-packet republishing must be selected explicitly.
+
 ## Publishing and republishing the PKARR packet
 
 DHT nodes and relays forget PKARR packets after a while unless they are published again. The proxy therefore republishes the PKARR packet for its Public Key Domain: right after startup, then every `republish_interval_secs`.
 
-In **external-packet mode** (without a DNS records file), each run resolves the most recent PKARR packet from the DHT and the relays and republishes it **unchanged**: same records, signature and timestamp. You must publish that packet once with another tool. If no packet is found, neither on the networks nor in the [packet cache](#packet-cache), a warning is logged.
+In **external-packet mode** (`[pkarr] mode = "external-packet"` or `--pkarr-mode external-packet`), each run resolves the most recent PKARR packet from the DHT and the relays and republishes it **unchanged**: same records, signature and timestamp. You must publish that packet once with another tool. If no packet is found, neither on the networks nor in the [packet cache](#packet-cache), a warning is logged. An existing default DNS records file is ignored; an explicit `dns_records_file` conflicts with this mode.
 
-In **local-records mode**, the proxy builds a PKARR packet from the [DNS records file](#publishing-dns-records), signs and publishes it, and checks the file for changes every three seconds. `[pkarr] publish = false` or `--no-pkarr-publish` disables both modes.
+In **local-records mode** (the default), the proxy requires the [DNS records file](#publishing-dns-records), signs and publishes it, and checks the file for changes every three seconds. `[pkarr] publish = false` or `--no-pkarr-publish` disables both modes and removes the DNS records file requirement for startup and `--check`.
 
 Each network is published to separately. A failed publish is retried after 1 and 5 minutes, then logged as an error. The next run starts at the next interval.
 
@@ -122,7 +187,7 @@ text = "hello"
 
 Owner `name` is relative to the Public Key Domain (`@` is the apex). `target` is a literal DNS name: `.` means the current host in an HTTPS/SVCB service record; use a fully qualified DNS name with a trailing dot for external CNAME or service targets. Supported `type` values: `A`, `AAAA`, `CNAME`, `TXT`, `HTTPS`, `SVCB`. For `HTTPS` and `SVCB`, set `priority` and `target`; optional service fields are `port`, `alpn = ["h2", "http/1.1"]`, `no_default_alpn = true`, `ipv4hint = ["203.0.113.10"]`, and `ipv6hint = ["2001:db8::1"]`. Priority 0 is alias mode and cannot have service fields. `ttl` on a record overrides `default_ttl` (300 seconds). TTLs must be positive; a port must be nonzero. The encoded DNS payload must fit PKARR's 1000-byte DNS packet limit.
 
-Run `pubky-tls-proxy --config /etc/pubky-tls-proxy/config.toml --check` before restarting. Invalid files at startup fail with a diagnostic; invalid live edits leave the last valid packet in place and are logged until corrected. Edits to comments, spacing, and record order do not cause a new publication. Valid changes publish promptly; clients may still cache old records until their TTL expires. If another writer uses the same secret key, the proxy tries to publish a newer PKARR packet built from the local DNS records file and logs repeated conflicts. To return to external-packet mode, remove the default file and restart (or remove an explicitly configured `dns_records_file` setting as well).
+Run `pubky-tls-proxy --config /etc/pubky-tls-proxy/config.toml --check` before restarting. Invalid files at startup fail with a diagnostic; invalid live edits leave the last valid packet in place and are logged until corrected. Edits to comments, spacing, and record order do not cause a new publication. Valid changes publish promptly; clients may still cache old records until their TTL expires. If another writer uses the same secret key, the proxy tries to publish a newer PKARR packet built from the local DNS records file and logs repeated conflicts. To return to external-packet mode, set `[pkarr] mode = "external-packet"`, remove any explicitly configured `dns_records_file`, and restart. Deleting a records file alone never changes the publishing mode.
 
 ## PROXY protocol
 
@@ -154,23 +219,26 @@ pubky-tls-proxy --secret-key-file secret --listen-addr 0.0.0.0:8443 --http-backe
 
 ## Creating a secret key
 
-The proxy generates and saves a secret key automatically when the file is missing, creating
-parent directories as needed. By default it uses `~/.pubky-tls-proxy/secret`; set
-`--secret-key-file` or `secret_key_file` to choose another path. With `--config`, the default
-key file is saved beside that config file. The process needs write access to the directory.
+`init` generates and saves a secret key when missing, creating
+parent directories as needed. Startup and `--check` require the saved key. By default it uses `~/.pubky-tls-proxy/secret`; set
+`secret_key_file` in an existing config before running `init` to choose another setup
+path, or use `--secret-key-file` to select an existing key at runtime. With `--config`,
+the default key file must exist beside that config file. Setup needs write access to the directory.
 
 Subsequent starts reuse the same key. Empty, malformed, or unreadable files cause an
 error and are never replaced. New secret key files have owner-only permissions (`0600`)
 on Unix. Back up the secret key to retain control of your Public Key Domain, and keep it private.
 Generating a replacement key creates a different Public Key Domain.
 
-To start with an automatically generated key:
+To prepare a generated key before startup:
 
 ```bash
+pubky-tls-proxy init
+pubky-tls-proxy --check
 pubky-tls-proxy
 ```
 
-The startup log shows the public key and the generated secret key file's location, never the
+The setup log shows the public key and the generated secret key file's location, never the
 secret key itself. To make a new Public Key Domain discoverable, create a [DNS records file](#publishing-dns-records)
 with an `A` record for the server and an `HTTPS` record for the proxy's listen port.
 That's port 8443 in the [recommended nginx guide](guides/nginx-letsencrypt.md),

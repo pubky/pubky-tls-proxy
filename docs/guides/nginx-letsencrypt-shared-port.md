@@ -14,7 +14,9 @@ The proxy decrypts raw public key TLS but passes certificate-based HTTPS through
 
 You need a server with `sudo` access, TCP ports **80 and 443** open to the public, and a conventional DNS domain whose A record points to your server. This guide calls that domain `example.com`: **replace it with yours in every file name, command, and configuration example**.
 
-Have the server's public IPv4 address ready. The proxy generates your secret key on first startup and reuses it on later starts.
+Have the server's public IPv4 address ready. The v0.4.0 binary used below generates
+your secret key on first startup. In the upcoming release, prepare it with `init`
+before starting; the service never generates a missing identity.
 
 Your conventional DNS domain's record is for requests to `example.com` and Let's Encrypt. The proxy builds a PKARR packet from `dns-records.toml`, signs and publishes it through PKARR, letting applications discover the server by its Public Key Domain. This discovery is separate from TLS.
 
@@ -102,10 +104,15 @@ sudo chmod 755 /usr/local/bin/pubky-tls-proxy
 pubky-tls-proxy --version
 ```
 
-For an existing installation, first update its configuration using the
-[migration guide](../configuration-migration.md).
-
 ## 4. Configure the proxy
+
+With the upcoming release, run
+`pubky-tls-proxy init --port 443` as your normal user to prepare the directory,
+secret key, and A + HTTPS records. Review the detected IP and advertised port
+`443` in the written records, not nginx's internal `8443`. Nothing is published by setup. Then configure
+the listeners and backends below and review the generated records instead of
+creating them manually. The v0.4.0 binary installed above uses the manual steps.
+See [initialization](../configuration.md#initialization).
 
 Run the proxy as your normal login user. Keep its configuration, secret key file, and packet cache together in `~/.pubky-tls-proxy/`. Create the directory without `sudo`:
 
@@ -163,7 +170,10 @@ Validate the files as your normal user, without `sudo`:
 pubky-tls-proxy --check
 ```
 
-Look for `Configuration and DNS records are valid`. On first setup, the check also reports that the secret key file is missing and will be generated at startup. On later checks, it validates the saved secret key too. The check runs offline and creates no secret key file; on first startup, the service generates a keypair, saves the secret key, and publishes the DNS records.
+Look for `Configuration and DNS records are valid`. In v0.4.0, a missing key is
+reported as pending generation at startup. In the upcoming release, the key must
+already exist (run `init` first). The check runs offline and creates no files.
+The service publishes the DNS records when it starts.
 
 ## 5. Start the proxy
 
@@ -210,7 +220,10 @@ sudo journalctl -u pubky-tls-proxy -n 30 --no-pager
 
 Look for your public key, `Listening on 0.0.0.0:80`, and `Listening on 0.0.0.0:443`. For DNS publishing, look for `Managing 2 DNS records from ...`, followed by `Published local PKARR packet to DHT` or `Published local PKARR packet to relays`. Publishing may take a little while; check the log again if needed.
 
-The proxy creates `~/.pubky-tls-proxy/secret` with owner-only permissions on first startup. Back it up securely after the first successful start to retain control of your Public Key Domain. Generating a replacement key creates a different Public Key Domain. Keep using the same directory across updates.
+The secret key at `~/.pubky-tls-proxy/secret` has owner-only permissions. In v0.4.0
+it is created on first startup; in the upcoming release it is created by `init`.
+Back it up securely to retain control of your Public Key Domain. Generating a
+replacement key creates a different Public Key Domain. Keep using the same directory across updates.
 
 ## 6. Set up certificate-based HTTPS
 

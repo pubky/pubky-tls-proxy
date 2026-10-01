@@ -21,6 +21,21 @@ stays the same.
 
 ## Getting started
 
+With a version that includes `init` (currently unreleased), prepare your files first:
+
+```sh
+pubky-tls-proxy init
+```
+
+Setup detects your outbound public IPv4 address and writes starter A + HTTPS
+records with port `8443`, without prompts. It prepares
+`config.toml`, `secret`, and `dns-records.toml` in `~/.pubky-tls-proxy/`, preserving
+existing files. **Nothing is published until you start the proxy.** Review the files
+and configure your backend before starting. Use `--public-ip` or `--port` to override
+the starter values. Behind NAT or a load balancer, use the
+address clients connect to and arrange inbound routing to the advertised port.
+See [initialization](docs/configuration.md#initialization) for unattended setup.
+
 Download a binary for your platform from the
 [latest release](https://github.com/pubky/pubky-tls-proxy/releases/latest/), then choose
 a setup guide.
@@ -35,8 +50,8 @@ a setup guide.
 You will need:
 
 - A web server or HTTP service for the proxy to forward requests to.
-- (Optionally) a secret key. The proxy generates one on first startup at
-  `~/.pubky-tls-proxy/secret`, or you can supply an existing key with `--secret-key-file`.
+- A configuration file and secret key prepared with `init` or your deployment tooling.
+  Startup requires both files. Use `--secret-key-file` to select an existing key.
 
 ## How it works
 
@@ -58,14 +73,14 @@ By default, the proxy sends the client's address to each backend using a
 configured to accept this header. If it doesn't support the PROXY protocol, use
 `--no-proxy-protocol`.
 
-With `dns-records.toml`, the proxy publishes changes automatically and republishes
-the PKARR packet every hour. Without the file, it republishes
-the latest PKARR packet from the network (or cached copy) unchanged.
+Local-record publishing is the default: startup requires `dns-records.toml`, publishes
+changes automatically, and republishes the PKARR packet every hour. To use externally
+managed records, explicitly set `[pkarr] mode = "external-packet"`; the proxy then
+republishes the latest packet from the network (or cached copy) unchanged.
 
 ## Documentation
 
 - [Terminology](docs/terminology.md): domains, keys, connection types, and PKARR publishing.
-- [Configuration migration](docs/configuration-migration.md): renamed CLI options and configuration keys.
 - [Configuration](docs/configuration.md): command-line options, config files,
   connection limits, packet republishing, and logging.
 - [Changelog](CHANGELOG.md): changes in each release.

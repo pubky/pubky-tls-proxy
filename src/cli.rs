@@ -3,7 +3,7 @@
 //! Every setting can also come from the config file (see `config.rs`). That's why most
 //! arguments are optional here: an absent flag means "use the config file or the default".
 
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use std::{net::SocketAddr, path::PathBuf};
 
 /// A proxy that terminates raw public key TLS with a secret key and routes HTTP(S)
@@ -13,18 +13,21 @@ use std::{net::SocketAddr, path::PathBuf};
 /// including certificate-based HTTPS, goes to the TLS passthrough backend without decryption.
 /// The PKARR packet for the Public Key Domain is republished periodically.
 ///
-/// A commented ~/.pubky-tls-proxy/config.toml is created on first run. Command line
+/// Run init to prepare ~/.pubky-tls-proxy/config.toml and the secret key. Command line
 /// arguments override the config file. Relative paths are resolved against the directory
 /// of the config file, both in the file and on the command line.
 #[derive(Parser, Debug, Default)]
-#[command(author, version, about)]
+#[command(author, version, about, args_conflicts_with_subcommands = true)]
 pub struct Args {
+    #[command(subcommand)]
+    pub command: Option<Command>,
+
     /// Config file to use instead of ~/.pubky-tls-proxy/config.toml. Must exist.
     #[arg(long, value_name = "FILE")]
     pub config: Option<PathBuf>,
 
     /// Secret key file containing 32 bytes as 64 hexadecimal characters.
-    /// Created automatically if missing. Relative to the config file's directory. [default: secret]
+    /// Must exist. Relative to the config file's directory. [default: secret]
     #[arg(long, value_name = "FILE")]
     pub secret_key_file: Option<PathBuf>,
 
@@ -69,6 +72,10 @@ pub struct Args {
     #[arg(long)]
     pub no_pkarr_publish: bool,
 
+    /// Source of published records. [default: local-records]
+    #[arg(long, value_enum)]
+    pub pkarr_mode: Option<crate::config::PkarrMode>,
+
     /// Seconds between two republish runs. [default: 3600]
     #[arg(long, value_name = "SECONDS")]
     pub pkarr_republish_interval_secs: Option<u64>,
@@ -80,11 +87,11 @@ pub struct Args {
     pub pkarr_packet_cache_file: Option<PathBuf>,
 
     /// Publish the complete DNS record set from this TOML file. Defaults to dns-records.toml
-    /// beside the config file if it exists.
+    /// beside the config file. Required in local-records mode.
     #[arg(long, value_name = "FILE")]
     pub dns_records_file: Option<PathBuf>,
 
-    /// Validate configuration, DNS records and an existing secret key offline without creating a key or listeners.
+    /// Validate required configuration, DNS records and secret key offline without creating files or listeners.
     #[arg(long)]
     pub check: bool,
 
@@ -111,6 +118,12 @@ pub struct Args {
     /// Don't use PKARR relays for publishing or republishing.
     #[arg(long)]
     pub no_pkarr_relays: bool,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum Command {
+    /// Prepare configuration, a secret key and DNS records without starting or publishing.
+    Init(crate::init::InitArgs),
 }
 
 #[cfg(test)]

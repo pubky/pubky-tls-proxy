@@ -6,13 +6,28 @@ All notable changes are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+- Add prompt-free `init` to prepare configuration, a secret key, and starter A + HTTPS
+  records using a detected public IPv4 and port 8443. Optional `--public-ip` and
+  `--port` override the defaults. Review the files before startup publishes them.
+  Detection failure leaves setup files untouched and explains the IP override.
+  Existing files are validated and preserved, and partial setup can be resumed.
+  Setup lists files and explains backend/address configuration and the check/start
+  commands. Routine setup logs are hidden unless enabled with `RUST_LOG`.
+
+### Changed
+- **Breaking:** Startup and `--check` require an existing config and secret key;
+  only `init` creates missing setup files. Local-record publishing is now the
+  default and requires a DNS records file. Select `[pkarr] mode = "external-packet"`
+  or `--pkarr-mode external-packet` for externally managed packets. Disabled
+  publishing requires no records.
+
 ## [0.4.0] - 2026-09-30
 
 ### Changed
 - **Breaking:** Rename CLI options and TOML keys for secret keys, TLS passthrough,
   connection timeouts, and PKARR publishing. Consolidate publishing settings under
   `[pkarr]`, remove `[republish]` and the `--backend-addr` alias, and reject old names.
-  See the [configuration migration guide](https://github.com/pubky/pubky-tls-proxy/blob/v0.4.0/docs/configuration-migration.md).
 - Rename the publishing subsystem to `PkarrPublisher`, with explicit local-records
   and external-packet constructors and settings matching the new configuration names.
 - Standardize terminology across documentation, CLI help, configuration comments,

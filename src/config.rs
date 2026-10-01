@@ -2,8 +2,7 @@
 //!
 //! Precedence: command line > config file > built-in defaults.
 //!
-//! The default config file is created from a commented template when missing. A file
-//! passed with `--config` must exist. Relative paths, from the file and from the
+//! Configuration must exist before startup. Relative paths, from the file and from the
 //! command line, are resolved against the directory of that config file.
 
 use crate::{cli::Args, proxy::ConnectionLimits};
@@ -11,18 +10,18 @@ use anyhow::{bail, ensure, Context, Result};
 use serde::Deserialize;
 use std::{
     fs,
-    io::{ErrorKind, Write},
+    io::ErrorKind,
     net::{Ipv4Addr, SocketAddr, SocketAddrV4, ToSocketAddrs},
     path::{Path, PathBuf},
     time::Duration,
 };
-use tempfile::NamedTempFile;
 use tokio::sync::Semaphore;
-use tracing::{info, warn};
+use tracing::warn;
 use url::Url;
 
 const CONFIG_DIR_NAME: &str = ".pubky-tls-proxy";
 const CONFIG_FILE_NAME: &str = "config.toml";
+#[cfg(test)]
 const CONFIG_TEMPLATE: &str = include_str!("../config.example.toml");
 
 const DEFAULT_LISTEN_ADDR: SocketAddr =
@@ -64,6 +63,7 @@ struct FileConfig {
 #[serde(deny_unknown_fields)]
 struct PkarrFileConfig {
     publish: Option<bool>,
+    mode: Option<PkarrMode>,
     republish_interval_secs: Option<u64>,
     packet_cache_file: Option<PathBuf>,
     dht_bootstrap_nodes: Option<Vec<String>>,
@@ -71,11 +71,20 @@ struct PkarrFileConfig {
     dns_records_file: Option<PathBuf>,
 }
 
+/// The authoritative source used by the publisher; file absence never selects a mode.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Deserialize, clap::ValueEnum)]
+#[serde(rename_all = "kebab-case")]
+pub enum PkarrMode {
+    #[default]
+    LocalRecords,
+    ExternalPacket,
+}
+
 /// Validated settings with all paths resolved and defaults applied.
 #[derive(Debug)]
 pub struct Settings {
-    /// The config file that was read, if any.
-    pub config_file: Option<PathBuf>,
+    /// The required config file that was read.
+    pub config_file: PathBuf,
     pub secret_key_file: PathBuf,
     pub listen_addrs: Vec<SocketAddr>,
     pub http_backend_addr: SocketAddr,
@@ -83,7 +92,7 @@ pub struct Settings {
     pub plain_http: bool,
     pub send_proxy_protocol: bool,
     pub limits: ConnectionLimits,
-    /// The optional DNS records file to validate, including when publishing is disabled.
+    /// Required in local-records mode when publishing is enabled.
     pub dns_records_file: Option<PathBuf>,
     /// `None` if PKARR publishing and republishing are disabled.
     pub pkarr_publish: Option<PkarrPublishSettings>,
@@ -104,11 +113,11 @@ pub struct PkarrPublishSettings {
 }
 
 impl Settings {
-    /// Reads the config file (if any), merges it with `args` and validates the result.
+    /// Reads the required config file, merges it with `args` and validates the result.
     ///
     /// # Errors
     ///
-    /// Fails if `--config` points to a missing file, the default config cannot be created,
+    /// Fails if the selected config or required records file is missing,
     /// the config file is invalid, or a PKARR network setting is unusable.
     pub fn load(args: Args) -> Result<Self> {
         Self::load_with_home_dir(args, std::env::home_dir())
@@ -116,10 +125,7 @@ impl Settings {
 
     fn load_with_home_dir(args: Args, home_dir: Option<PathBuf>) -> Result<Self> {
         let location = ConfigLocation::find(args.config.as_deref(), home_dir)?;
-        let file = match &location.file {
-            Some(path) => read_config_file(path)?,
-            None => FileConfig::default(),
-        };
+        let file = read_config_file(&location.file)?;
 
         let secret_key_file = args
             .secret_key_file
@@ -135,11 +141,10 @@ impl Settings {
         let limits = connection_limits(&args, &file)?;
 
         let is_publish_enabled = !args.no_pkarr_publish && file.pkarr.publish.unwrap_or(true);
-        let dns_records_file = if is_publish_enabled || args.check {
-            dns_records_file(&args, &file, &location)?
-        } else {
-            None
-        };
+        let dns_records_file = records_path(&args, &file, &location)?;
+        if let Some(path) = &dns_records_file {
+            ensure!(path.is_file(), "DNS records file {path:?} does not exist. Run pubky-tls-proxy init --directory {:?}, then review the records before starting.", location.base_dir);
+        }
         let pkarr_publish = if is_publish_enabled {
             Some(pkarr_publish_settings(
                 &args,
@@ -216,83 +221,86 @@ fn connection_limits(args: &Args, file: &FileConfig) -> Result<ConnectionLimits>
 
 /// Where the config file is and which directory relative paths are resolved against.
 struct ConfigLocation {
-    /// An existing config file, or `None` if there is none to read.
-    file: Option<PathBuf>,
-    /// `None` if there is no home directory and no `--config`. Paths are then used as given.
-    base_dir: Option<PathBuf>,
+    file: PathBuf,
+    base_dir: PathBuf,
 }
 
 impl ConfigLocation {
     fn find(explicit_config_file: Option<&Path>, home_dir: Option<PathBuf>) -> Result<Self> {
-        if let Some(config_file) = explicit_config_file {
-            ensure!(
-                config_file.is_file(),
-                "Config file {config_file:?} does not exist"
-            );
-            return Ok(Self {
-                file: Some(config_file.to_path_buf()),
-                base_dir: config_file.parent().map(Path::to_path_buf),
-            });
-        }
-
-        let Some(home_dir) = home_dir else {
-            return Ok(Self {
-                file: None,
-                base_dir: None,
-            });
+        let config_file = match explicit_config_file {
+            Some(path) => path.to_path_buf(),
+            None => home_dir
+                .context("Cannot locate home directory; supply --config")?
+                .join(CONFIG_DIR_NAME)
+                .join(CONFIG_FILE_NAME),
         };
-        let config_dir = home_dir.join(CONFIG_DIR_NAME);
-        let default_config_file = config_dir.join(CONFIG_FILE_NAME);
-        create_default_config_file(&default_config_file)?;
+        let base_dir = config_file.parent().unwrap_or(Path::new(".")).to_path_buf();
+        ensure!(config_file.is_file(), "Config file {config_file:?} does not exist. Run pubky-tls-proxy init --directory {:?} to prepare it.", base_dir);
         Ok(Self {
-            file: Some(default_config_file),
-            base_dir: Some(config_dir),
+            file: config_file,
+            base_dir,
         })
     }
 
     /// Resolves `path` against the base directory. Absolute paths are returned unchanged.
     fn resolve(&self, path: &Path) -> PathBuf {
-        match &self.base_dir {
-            Some(base_dir) => base_dir.join(path),
-            None => path.to_path_buf(),
-        }
+        self.base_dir.join(path)
     }
-}
-
-/// Publish a complete starter file without replacing an existing config, even across processes.
-fn create_default_config_file(path: &Path) -> Result<()> {
-    match fs::symlink_metadata(path) {
-        Ok(_) => return Ok(()),
-        Err(error) if error.kind() == ErrorKind::NotFound => {}
-        Err(error) => {
-            return Err(error).with_context(|| format!("Failed to inspect config file {path:?}"))
-        }
-    }
-
-    let parent = path
-        .parent()
-        .expect("default config file has a parent directory");
-    fs::create_dir_all(parent)
-        .with_context(|| format!("Failed to create config directory {parent:?}"))?;
-    let mut temporary = NamedTempFile::new_in(parent)
-        .with_context(|| format!("Failed to create temporary config in {parent:?}"))?;
-    temporary
-        .write_all(CONFIG_TEMPLATE.as_bytes())
-        .with_context(|| format!("Failed to write config template in {parent:?}"))?;
-    match temporary.persist_noclobber(path) {
-        Ok(_) => info!("Created starter config file at {path:?}"),
-        Err(error) if error.error.kind() == ErrorKind::AlreadyExists => {}
-        Err(error) => {
-            return Err(error).with_context(|| format!("Failed to save config file {path:?}"))
-        }
-    }
-    Ok(())
 }
 
 fn read_config_file(path: &Path) -> Result<FileConfig> {
     let content =
         fs::read_to_string(path).with_context(|| format!("Failed to read config file {path:?}"))?;
     toml::from_str(&content).with_context(|| format!("Invalid config file {path:?}"))
+}
+
+/// Resolved setup settings, including existing paths and values shown in the next steps.
+pub struct InitSettings {
+    pub secret_key_file: PathBuf,
+    pub dns_records_file: Option<PathBuf>,
+    pub http_backend_addr: SocketAddr,
+    pub pkarr_mode: Option<PkarrMode>,
+}
+
+/// Validate existing settings offline and resolve the paths init should fill in.
+/// Missing files are allowed here; normal startup requires them.
+pub fn init_settings(config_path: &Path) -> Result<InitSettings> {
+    let file = match fs::symlink_metadata(config_path) {
+        Ok(_) => read_config_file(config_path)?,
+        Err(error) if error.kind() == ErrorKind::NotFound => FileConfig::default(),
+        Err(error) => return Err(error).context("Failed to inspect config file"),
+    };
+    connection_limits(&Args::default(), &file)?;
+    ensure!(
+        file.listen_addrs
+            .as_ref()
+            .is_none_or(|addrs| !addrs.is_empty()),
+        "listen_addrs must not be empty"
+    );
+    let location = ConfigLocation {
+        file: config_path.to_path_buf(),
+        base_dir: config_path.parent().unwrap_or(Path::new(".")).to_path_buf(),
+    };
+    let dns_records_file = records_path(&Args::default(), &file, &location)?;
+    if file.pkarr.publish.unwrap_or(true) {
+        // Reuse offline check validation, without requiring the records file yet.
+        let check_args = Args {
+            check: true,
+            ..Args::default()
+        };
+        pkarr_publish_settings(&check_args, &file, &location, None)?;
+    }
+    let parent = config_path.parent().unwrap_or(Path::new("."));
+    Ok(InitSettings {
+        secret_key_file: parent.join(file.secret_key_file.unwrap_or_else(|| "secret".into())),
+        dns_records_file,
+        http_backend_addr: file.http_backend_addr.unwrap_or(DEFAULT_HTTP_BACKEND_ADDR),
+        pkarr_mode: file
+            .pkarr
+            .publish
+            .unwrap_or(true)
+            .then(|| file.pkarr.mode.unwrap_or_default()),
+    })
 }
 
 fn pkarr_publish_settings(
@@ -359,27 +367,26 @@ fn pkarr_publish_settings(
     })
 }
 
-fn dns_records_file(
+fn records_path(
     args: &Args,
     file: &FileConfig,
     location: &ConfigLocation,
 ) -> Result<Option<PathBuf>> {
-    // An explicit path is required; the default file is used only when present.
     let configured = args
         .dns_records_file
         .clone()
         .or(file.pkarr.dns_records_file.clone());
-    match configured {
-        Some(path) => {
-            let path = location.resolve(&path);
-            ensure!(path.is_file(), "DNS records file {path:?} does not exist");
-            Ok(Some(path))
-        }
-        None => {
-            let path = location.resolve(Path::new(DEFAULT_DNS_RECORDS_FILE));
-            Ok(path.is_file().then_some(path))
-        }
+    let mode = args.pkarr_mode.or(file.pkarr.mode).unwrap_or_default();
+    if mode == PkarrMode::ExternalPacket {
+        ensure!(configured.is_none(), "external-packet mode conflicts with dns_records_file; remove the records path or select local-records mode");
+        return Ok(None);
     }
+    if args.no_pkarr_publish || !file.pkarr.publish.unwrap_or(true) {
+        return Ok(None);
+    }
+    Ok(Some(location.resolve(
+        &configured.unwrap_or_else(|| DEFAULT_DNS_RECORDS_FILE.into()),
+    )))
 }
 
 /// Resolves `host:port` bootstrap nodes to the IPv4 addresses mainline can use.
@@ -455,6 +462,11 @@ mod tests {
             let home = Self::without_config();
             fs::create_dir(home.config_dir()).unwrap();
             fs::write(home.config_dir().join(CONFIG_FILE_NAME), config).unwrap();
+            fs::write(
+                home.config_dir().join(DEFAULT_DNS_RECORDS_FILE),
+                "records = []",
+            )
+            .unwrap();
             home
         }
 
@@ -477,8 +489,8 @@ mod tests {
     }
 
     #[test]
-    fn first_start_creates_commented_config_and_uses_defaults() {
-        let home = FakeHome::without_config();
+    fn prepared_config_uses_defaults() {
+        let home = FakeHome::with_config(CONFIG_TEMPLATE);
         let args = Args {
             no_pkarr_publish: false,
             no_pkarr_dht: true,
@@ -488,7 +500,7 @@ mod tests {
         let settings = home.load(args).unwrap();
 
         let config_file = home.config_dir().join(CONFIG_FILE_NAME);
-        assert_eq!(settings.config_file, Some(config_file.clone()));
+        assert_eq!(settings.config_file, config_file.clone());
         let template = fs::read_to_string(&config_file).unwrap();
         assert_eq!(template, CONFIG_TEMPLATE);
         assert_eq!(
@@ -527,7 +539,7 @@ mod tests {
 
     #[test]
     fn subsequent_starts_preserve_edited_config() {
-        let home = FakeHome::without_config();
+        let home = FakeHome::with_config("");
         let config_file = home.config_dir().join(CONFIG_FILE_NAME);
         home.load(args_with_secret_key_file()).unwrap();
         let edited = "listen_addrs = ['127.0.0.1:9000']\n";
@@ -565,7 +577,7 @@ mod tests {
 
         assert_eq!(
             settings.config_file,
-            Some(home.config_dir().join(CONFIG_FILE_NAME))
+            home.config_dir().join(CONFIG_FILE_NAME)
         );
         assert_eq!(
             settings.secret_key_file,
@@ -677,7 +689,7 @@ mod tests {
 
     #[test]
     fn relative_cli_paths_resolve_against_config_dir_on_first_start() {
-        let home = FakeHome::without_config();
+        let home = FakeHome::with_config("");
 
         let settings = home.load(args_with_secret_key_file()).unwrap();
 
@@ -686,7 +698,7 @@ mod tests {
 
     #[test]
     fn absolute_paths_are_kept() {
-        let home = FakeHome::without_config();
+        let home = FakeHome::with_config("");
         let args = Args {
             secret_key_file: Some("/etc/pkdns-demo/secret.hex".into()),
             ..args_with_secret_key_file()
@@ -714,7 +726,7 @@ mod tests {
 
         let settings = home.load(args).unwrap();
 
-        assert_eq!(settings.config_file, Some(config_file));
+        assert_eq!(settings.config_file, config_file);
         assert_eq!(
             settings.secret_key_file,
             other_dir.path().join("secret.hex")
@@ -778,7 +790,7 @@ mod tests {
     }
 
     #[test]
-    fn cli_can_disable_publishing_and_check_still_requires_explicit_records_file() {
+    fn disabled_publishing_does_not_require_records_for_startup_or_check() {
         let home = FakeHome::with_config(
             "[pkarr]\npublish = true\ndns_records_file = 'missing.toml'\ndht_bootstrap_nodes = []\nrelay_urls = []\n",
         );
@@ -786,13 +798,13 @@ mod tests {
         assert!(settings.pkarr_publish.is_none());
         assert!(settings.dns_records_file.is_none());
 
-        let error = home
+        let settings = home
             .load(Args {
                 check: true,
                 ..args_with_secret_key_file()
             })
-            .unwrap_err();
-        assert!(error.to_string().contains("DNS records file"), "{error:#}");
+            .unwrap();
+        assert!(settings.dns_records_file.is_none());
 
         fs::write(home.config_dir().join("missing.toml"), "records = []").unwrap();
         let settings = home
@@ -802,10 +814,7 @@ mod tests {
             })
             .unwrap();
         assert!(settings.pkarr_publish.is_none());
-        assert_eq!(
-            settings.dns_records_file,
-            Some(home.config_dir().join("missing.toml"))
-        );
+        assert!(settings.dns_records_file.is_none());
     }
 
     #[test]
@@ -856,7 +865,7 @@ mod tests {
 
     #[test]
     fn secret_key_file_defaults_to_config_directory() {
-        let home = FakeHome::without_config();
+        let home = FakeHome::with_config("");
 
         let settings = home
             .load(Args {
@@ -886,7 +895,7 @@ mod tests {
 
     #[test]
     fn no_pkarr_dht_flag_disables_dht() {
-        let home = FakeHome::without_config();
+        let home = FakeHome::with_config("");
         let args = Args {
             no_pkarr_publish: false,
             no_pkarr_dht: true,
@@ -939,7 +948,7 @@ mod tests {
 
     #[test]
     fn invalid_relay_url_is_an_error() {
-        let home = FakeHome::without_config();
+        let home = FakeHome::with_config("");
         let args = Args {
             no_pkarr_publish: false,
             no_pkarr_dht: true,
@@ -1027,5 +1036,60 @@ mod tests {
             })
             .unwrap_err();
         assert!(error.to_string().contains("does not exist"), "{error}");
+    }
+
+    #[test]
+    fn missing_default_config_fails_without_creating_files() {
+        let home = FakeHome::without_config();
+        let error = home.load(args_with_secret_key_file()).unwrap_err();
+        assert!(error.to_string().contains("init --directory"), "{error}");
+        assert!(!home.config_dir().exists());
+    }
+
+    #[test]
+    fn missing_records_do_not_implicitly_select_external_mode() {
+        let home = FakeHome::with_config("[pkarr]\ndht_bootstrap_nodes = []\n");
+        fs::remove_file(home.config_dir().join(DEFAULT_DNS_RECORDS_FILE)).unwrap();
+        for check in [false, true] {
+            let error = home
+                .load(Args {
+                    check,
+                    ..Args::default()
+                })
+                .unwrap_err();
+            assert!(error.to_string().contains("DNS records file"), "{error}");
+        }
+        let settings = home
+            .load(Args {
+                pkarr_mode: Some(PkarrMode::ExternalPacket),
+                ..Args::default()
+            })
+            .unwrap();
+        assert!(settings.dns_records_file.is_none());
+    }
+
+    #[test]
+    fn explicit_external_mode_ignores_default_file_and_rejects_explicit_records_path() {
+        let home =
+            FakeHome::with_config("[pkarr]\nmode = 'external-packet'\ndht_bootstrap_nodes = []\n");
+        assert!(home
+            .load(Args::default())
+            .unwrap()
+            .dns_records_file
+            .is_none());
+        let error = home
+            .load(Args {
+                dns_records_file: Some("custom.toml".into()),
+                ..Args::default()
+            })
+            .unwrap_err();
+        assert!(error.to_string().contains("conflicts"), "{error}");
+        let local = home
+            .load(Args {
+                pkarr_mode: Some(PkarrMode::LocalRecords),
+                ..Args::default()
+            })
+            .unwrap();
+        assert!(local.dns_records_file.is_some());
     }
 }
