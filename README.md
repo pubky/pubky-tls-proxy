@@ -21,35 +21,22 @@ address can change while the domain stays the same.
 
 ## Getting started
 
-Prepare your files before starting:
+You'll need an HTTP service, such as nginx, for the proxy to forward requests to.
 
-```sh
-pubky-tls-proxy init
-```
+**Choose a setup guide:**
 
-Setup detects your outbound public IPv4 address and writes starter A + HTTPS
-records with port `8443`, without prompts. It prepares
-`config.toml`, `secret`, and `dns-records.toml` in `~/.pubky-tls-proxy/`, preserving
-existing files. **Nothing is published until you start the proxy.** Review the files
-and configure your backend before starting. Use `--public-ip` or `--port` to override
-the starter values. Behind NAT or a load balancer, use the
-address clients connect to and arrange inbound routing to the advertised port.
-See [initialization](docs/configuration.md#initialization) for unattended setup.
+- **[Separate port (recommended)](docs/guides/nginx-letsencrypt.md)** — Keep nginx on
+  ports 80 and 443 and run Pubky TLS Proxy on port 8443.
+- **[Shared ports](docs/guides/nginx-letsencrypt-shared-port.md)** — Run the proxy in
+  front of nginx to serve both raw public key TLS and certificate-based HTTPS on
+  port 443.
 
-Download a binary for your platform from the
-[latest release](https://github.com/pubky/pubky-tls-proxy/releases/latest/), then choose
-a setup guide.
+Both guides cover installation, configuration, and running the proxy on Ubuntu or
+Debian.
 
-- [Use a separate port for raw public key TLS](docs/guides/nginx-letsencrypt.md) (recommended).
-  This Ubuntu and Debian guide leaves nginx on ports 80 and 443 and runs the proxy on
-  port 8443.
-- [Share ports 80 and 443](docs/guides/nginx-letsencrypt-shared-port.md).
-  Use this setup if raw public key TLS must be available on port 443. The proxy sits
-  in front of nginx and routes both types of TLS connection.
-
-You will need:
-
-- A web server or HTTP service for the proxy to forward requests to.
+For other setups, download a binary from the
+[latest release](https://github.com/pubky/pubky-tls-proxy/releases/latest/) and follow
+the [configuration reference](docs/configuration.md).
 
 ## How it works
 
