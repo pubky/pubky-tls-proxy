@@ -104,9 +104,6 @@ sudo chmod 755 /usr/local/bin/pubky-tls-proxy
 pubky-tls-proxy --version
 ```
 
-For an existing installation, first update its configuration using the
-[migration guide](../configuration-migration.md).
-
 ## 4. Configure the proxy
 
 With the upcoming release, run

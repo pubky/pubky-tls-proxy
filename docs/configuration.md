@@ -4,9 +4,6 @@ Every setting can be given on the command line or in a config file. Command line
 arguments override the config file, and the config file overrides the defaults.
 Run `pubky-tls-proxy --help` for all arguments.
 
-Version 0.4.0 renames several options and consolidates PKARR settings. See the
-[migration guide](configuration-migration.md) when upgrading from 0.3.x.
-
 ```bash
 pubky-tls-proxy [--config <FILE>] [--secret-key-file <FILE>] [--listen-addr <ADDR>]... [--http-backend-addr <ADDR>] [--tls-passthrough-backend-addr <ADDR>] [--no-plain-http] [--no-proxy-protocol] ...
 ```

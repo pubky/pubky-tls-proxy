@@ -81,7 +81,6 @@ republishes the latest packet from the network (or cached copy) unchanged.
 ## Documentation
 
 - [Terminology](docs/terminology.md): domains, keys, connection types, and PKARR publishing.
-- [Configuration migration](docs/configuration-migration.md): renamed CLI options and configuration keys.
 - [Configuration](docs/configuration.md): command-line options, config files,
   connection limits, packet republishing, and logging.
 - [Changelog](CHANGELOG.md): changes in each release.

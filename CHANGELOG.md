@@ -20,7 +20,7 @@ All notable changes are documented here. The format is based on
   only `init` creates missing setup files. Local-record publishing is now the
   default and requires a DNS records file. Select `[pkarr] mode = "external-packet"`
   or `--pkarr-mode external-packet` for externally managed packets. Disabled
-  publishing requires no records. See the configuration migration guide.
+  publishing requires no records.
 
 ## [0.4.0] - 2026-09-30
 
@@ -28,7 +28,6 @@ All notable changes are documented here. The format is based on
 - **Breaking:** Rename CLI options and TOML keys for secret keys, TLS passthrough,
   connection timeouts, and PKARR publishing. Consolidate publishing settings under
   `[pkarr]`, remove `[republish]` and the `--backend-addr` alias, and reject old names.
-  See the [configuration migration guide](https://github.com/pubky/pubky-tls-proxy/blob/v0.4.0/docs/configuration-migration.md).
 - Rename the publishing subsystem to `PkarrPublisher`, with explicit local-records
   and external-packet constructors and settings matching the new configuration names.
 - Standardize terminology across documentation, CLI help, configuration comments,
