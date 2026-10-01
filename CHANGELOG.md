@@ -7,6 +7,8 @@ All notable changes are documented here. The format is based on
 ## [Unreleased]
 
 ### Added
+- Give interactive setup a short introduction, address lookup progress, compact
+  review, and validation/start commands. Skip confirmation when all files exist.
 - Add interactive `init` to prepare configuration, a secret key, and A + HTTPS DNS
   records for review without starting listeners or publishing. Public IPv4 detection
   is a suggestion only; unattended setup requires an explicit `--public-ip`.

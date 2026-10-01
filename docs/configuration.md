@@ -82,8 +82,10 @@ work with v0.4.0.
 pubky-tls-proxy init
 ```
 
-On a terminal, setup asks for a public IPv4 address and public TLS port (default
-`8443`), shows the A + HTTPS records and file paths, then asks for confirmation.
+On a terminal, setup introduces the files it will prepare, then asks for a public
+IPv4 address and public TLS port (default `8443`). A compact review shows the endpoint,
+record types, and which files will be created or kept before confirmation.
+When all required files already exist and are valid, setup skips confirmation.
 Before confirmation it creates no directories or files. It prepares `config.toml`,
 `secret`, and `dns-records.toml` in `~/.pubky-tls-proxy/`. It never starts listeners,
 contacts PKARR networks, or publishes records.

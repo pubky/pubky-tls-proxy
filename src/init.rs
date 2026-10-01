@@ -42,6 +42,22 @@ pub async fn run(args: &InitArgs) -> Result<()> {
     let paths = crate::config::init_file_paths(&config_path)?;
     let secret_path = paths.secret_key_file;
     let records_path = paths.dns_records_file;
+    let interactive = !args.non_interactive;
+    if interactive {
+        ensure!(
+            io::stdin().is_terminal() && io::stdout().is_terminal(),
+            "No interactive terminal; use --non-interactive and --public-ip"
+        );
+        println!("Pubky TLS Proxy setup\n");
+        let files = if records_path.is_some() {
+            "config, key, and DNS records"
+        } else {
+            "config and key"
+        };
+        println!("Prepare {files} in:\n  {}\n", directory.display());
+        println!("Existing files are preserved. Nothing is started or published.");
+        println!("Enter accepts defaults; Ctrl+C cancels.\n");
+    }
     let existing_key = crate::secret::check_keypair(&secret_path)?;
     let existing_records = match &records_path {
         Some(path) if path_exists(path)? => Some(crate::dns_records::DnsRecords::load(path)?),
@@ -53,88 +69,101 @@ pub async fn run(args: &InitArgs) -> Result<()> {
             None,
         )?;
     }
-    let interactive = !args.non_interactive;
-    if interactive {
-        ensure!(
-            io::stdin().is_terminal() && io::stdout().is_terminal(),
-            "No interactive terminal; use --non-interactive and --public-ip"
-        );
-    }
-    let records_text = if records_path.is_some() && existing_records.is_none() {
+    let prepared_records = if records_path.is_some() && existing_records.is_none() {
         Some(prepare_records(args).await?)
     } else {
         None
     };
 
-    println!("Setup files (existing files are preserved):");
-    for path in [&config_path, &secret_path]
-        .into_iter()
-        .chain(records_path.iter())
-    {
-        println!(
-            "  {}: {}",
-            path.display(),
-            if path_exists(path)? {
-                "existing"
-            } else {
-                "create"
-            }
-        );
-    }
-    if let (Some(text), Some(path)) = (&records_text, &records_path) {
-        crate::dns_records::DnsRecords::parse(text, path)?
+    if let (Some(records), Some(path)) = (&prepared_records, &records_path) {
+        crate::dns_records::DnsRecords::parse(&records.contents, path)?
             .sign(&existing_key.unwrap_or_else(pkarr::Keypair::random), None)?;
-        println!("\nDNS records:\n{text}");
-    } else if records_path.is_some() {
-        println!(
-            "Existing DNS records will be preserved; --public-ip and --port do not change them."
-        );
-    } else {
-        println!(
-            "This configuration does not use local DNS records; no records file will be created."
-        );
     }
-    if interactive && !prompt("Create missing files? (y/N)", Some("n"))?.eq_ignore_ascii_case("y") {
-        println!("Setup cancelled. No files created.");
-        return Ok(());
+    if interactive {
+        println!("\nReview");
+        if let Some(records) = &prepared_records {
+            println!(
+                "  Address: {}:{}\n  Records: A + HTTPS",
+                records.address, records.port
+            );
+        } else if records_path.is_some() {
+            println!("  DNS records: keep existing");
+        } else {
+            println!("  Local DNS records: not needed");
+        }
+        let file_paths: Vec<_> = [&config_path, &secret_path]
+            .into_iter()
+            .chain(records_path.iter())
+            .map(|path| path.as_path())
+            .collect();
+        let has_missing_files = review_files(&file_paths, &directory)?;
+        if has_missing_files && !prompt("\nCreate files? [y/N]", None)?.eq_ignore_ascii_case("y") {
+            println!("Setup cancelled. No files created.");
+            return Ok(());
+        }
+        if !has_missing_files {
+            println!("\nAll files already exist and are valid.");
+        }
     }
     create_file_if_missing(&config_path, include_str!("../config.example.toml"))?;
     let keypair = crate::secret::load_or_create_keypair(&secret_path)?;
-    if let (Some(text), Some(path)) = (records_text, &records_path) {
-        create_file_if_missing(path, &text)?;
+    if let (Some(records), Some(path)) = (prepared_records, &records_path) {
+        create_file_if_missing(path, &records.contents)?;
     }
     if let Some(path) = &records_path {
         crate::dns_records::DnsRecords::load(path)?.sign(&keypair, None)?;
-        println!(
-            "Review {} and ensure the advertised TCP port reaches this machine.",
-            path.display()
+    }
+    println!("\nSetup complete. Nothing has been published.");
+    println!("Public Key Domain: {}", keypair.public_key());
+    if interactive {
+        print_next_steps(
+            &config_path,
+            records_path.as_deref(),
+            args.directory.is_some(),
         );
     }
-    println!("Setup complete. Nothing has been published.\nPublic Key Domain: {}\nReview the configuration, then run pubky-tls-proxy with --config {:?}.", keypair.public_key(), config_path);
     Ok(())
 }
 
-async fn prepare_records(args: &InitArgs) -> Result<String> {
+/// The reviewed endpoint and the corresponding complete DNS records file.
+struct PreparedRecords {
+    address: Ipv4Addr,
+    port: u16,
+    contents: String,
+}
+
+async fn prepare_records(args: &InitArgs) -> Result<PreparedRecords> {
+    if !args.non_interactive {
+        println!("Public address");
+    }
     let suggested = match args.public_ip {
         Some(ip) => {
             validate_public_ipv4(ip)?;
+            if !args.non_interactive {
+                println!("Address supplied with --public-ip: {ip}");
+            }
             Some(ip)
         }
         None if args.non_interactive => {
             bail!("Missing DNS records: --non-interactive requires --public-ip")
         }
-        None => match detect_public_ipv4().await {
-            Ok(ip) => {
-                println!("Detected public IPv4: {ip}\nThis is your outbound address; incoming connections may use a different address.");
-                Some(ip)
+        None => {
+            println!("Looking up your public IPv4...");
+            match detect_public_ipv4().await {
+                Ok(ip) => {
+                    println!("Detected outbound address: {ip}");
+                    Some(ip)
+                }
+                Err(error) => {
+                    tracing::debug!("Public IPv4 detection failed: {error:#}");
+                    println!("Could not detect an address. Enter it manually.");
+                    None
+                }
             }
-            Err(error) => {
-                println!("Could not detect public IPv4: {error}. Enter it manually.");
-                None
-            }
-        },
+        }
     };
     let ip = if !args.non_interactive {
+        println!("Verify this address is reachable by your clients.\n");
         loop {
             let input = prompt(
                 "Public IPv4 address",
@@ -159,7 +188,47 @@ async fn prepare_records(args: &InitArgs) -> Result<String> {
     } else {
         args.port
     };
-    Ok(starter_records(ip, port))
+    Ok(PreparedRecords {
+        address: ip,
+        port,
+        contents: starter_records(ip, port),
+    })
+}
+
+/// Show file actions using relative names where possible, and report whether confirmation is needed.
+fn review_files(paths: &[&Path], directory: &Path) -> Result<bool> {
+    println!();
+    let mut has_missing_files = false;
+    for path in paths {
+        let exists = path_exists(path)?;
+        has_missing_files |= !exists;
+        let name = path.strip_prefix(directory).unwrap_or(path);
+        println!(
+            "  {:<24} {}",
+            name.display(),
+            if exists { "keep existing" } else { "create" }
+        );
+    }
+    Ok(has_missing_files)
+}
+
+fn print_next_steps(config_path: &Path, records_path: Option<&Path>, custom_directory: bool) {
+    println!(
+        "\nReview listener/backend settings in {}.",
+        config_path.display()
+    );
+    if let Some(path) = records_path {
+        println!(
+            "Review {} and ensure the advertised port is reachable.",
+            path.display()
+        );
+    }
+    let config_arg = if custom_directory {
+        format!(" --config {config_path:?}")
+    } else {
+        String::new()
+    };
+    println!("\nThen run:\n  pubky-tls-proxy{config_arg} --check\n  pubky-tls-proxy{config_arg}");
 }
 
 fn prompt(label: &str, default: Option<&str>) -> Result<String> {
