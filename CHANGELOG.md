@@ -6,6 +6,8 @@ All notable changes are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-10-01
+
 ### Added
 - Add prompt-free `init` to prepare configuration, a secret key, and starter A + HTTPS
   records using a detected public IPv4 and port 8443. Optional `--public-ip` and
@@ -133,7 +135,8 @@ All notable changes are documented here. The format is based on
 
 - First release candidate.
 
-[Unreleased]: https://github.com/pubky/pubky-tls-proxy/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/pubky/pubky-tls-proxy/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/pubky/pubky-tls-proxy/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/pubky/pubky-tls-proxy/compare/v0.3.4...v0.4.0
 [0.3.4]: https://github.com/pubky/pubky-tls-proxy/compare/v0.3.3...v0.3.4
 [0.3.3]: https://github.com/pubky/pubky-tls-proxy/compare/v0.3.2...v0.3.3

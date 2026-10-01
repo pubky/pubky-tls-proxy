@@ -72,9 +72,6 @@ To dedicate a listen port to raw public key TLS, set `plain_http = false` and le
 
 ## Initialization
 
-`init` is available in the next release; the existing manual setup instructions also
-work with v0.4.0.
-
 ```sh
 pubky-tls-proxy init
 ```
