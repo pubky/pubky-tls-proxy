@@ -21,7 +21,7 @@ pubky-tls-proxy [--config <FILE>] [--secret-key-file <FILE>] [--listen-addr <ADD
 - `--rpk-handshake-timeout-secs`: Maximum time to complete a raw public key (RPK) TLS handshake after traffic detection [default: 10].
 - `--backend-setup-timeout-secs`: Maximum time to connect to a backend and send its PROXY protocol header [default: 10].
 - `--idle-timeout-secs`: Close an established connection after this many seconds without data transfer in either direction [default: 300]. Active connections have no maximum lifetime.
-- `--no-pkarr-publish`: Disable PKARR publishing and republishing.
+- `--no-pkarr-publish`: Disable [PKARR](https://github.com/pubky/pkarr) publishing and republishing.
 - `--pkarr-mode`: `local-records` (default) or `external-packet`. CLI overrides `[pkarr] mode`.
 - `--pkarr-republish-interval-secs`: Seconds between two republish runs [default: 3600].
 - `--pkarr-packet-cache-file`: Where the [packet cache](#packet-cache) is kept [default: `pkarr-packet.cache` in the config directory].

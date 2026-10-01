@@ -16,7 +16,7 @@ You need:
 - A server with a public IPv4 address and a user with `sudo` access. Open **TCP ports 80, 443 and 8443** in the server and cloud firewalls.
 - A conventional DNS domain pointing to that address. This guide uses `example.com`; **replace it with your domain everywhere**, including in file names and configuration examples.
 
-The proxy publishes DNS records for your Public Key Domain through PKARR from `dns-records.toml`, which you will create below. Your conventional DNS domain's record is still needed for requests to `example.com` and Let's Encrypt. The records in this file let applications discover the server by its Public Key Domain; PKARR discovery is separate from TLS.
+The proxy publishes DNS records for your Public Key Domain through [PKARR](https://github.com/pubky/pkarr) from `dns-records.toml`, which you will create below. Your conventional DNS domain's record is still needed for requests to `example.com` and Let's Encrypt. The records in this file let applications discover the server by its Public Key Domain; PKARR discovery is separate from TLS.
 
 Prepare the secret key with `init` before starting. The service requires the saved
 key and reuses it on later starts.

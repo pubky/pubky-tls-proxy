@@ -16,8 +16,8 @@ clients identify the server by its public key rather than a certificate issued b
 certificate authority. The proxy handles this part so your web server doesn't need to.
 
 A **Public Key Domain** is a domain named by an encoded public key. Its DNS records
-are published through PKARR, so the server's IP address can change while the domain
-stays the same.
+are published through [PKARR](https://github.com/pubky/pkarr), so the server's IP
+address can change while the domain stays the same.
 
 ## Getting started
 
