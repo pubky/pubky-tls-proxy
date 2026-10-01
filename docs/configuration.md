@@ -87,6 +87,10 @@ Setup writes starter files without prompts or a terminal requirement. It prepare
 detected public IPv4 and port `8443` for A + HTTPS records. These defaults suit a
 typical public-server setup. It never starts listeners, contacts PKARR networks,
 or publishes records. Review the IP, port, and backend settings before starting.
+The completion summary lists the files and points to `http_backend_addr`, your
+current backend address, and the DNS endpoint. Reruns mark existing files as kept
+without claiming they contain newly generated defaults. Routine internal logs are
+hidden during setup; use `RUST_LOG=info` or `RUST_LOG=debug` for diagnostics.
 
 Address detection queries `https://api.ipify.org`, with
 `https://ipv4.icanhazip.com` as a fallback, using direct IPv4 HTTPS connections.

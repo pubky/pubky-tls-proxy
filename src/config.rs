@@ -254,15 +254,17 @@ fn read_config_file(path: &Path) -> Result<FileConfig> {
     toml::from_str(&content).with_context(|| format!("Invalid config file {path:?}"))
 }
 
-/// Files init should prepare; external-packet mode and disabled publishing need no records.
-pub struct InitFilePaths {
+/// Resolved setup settings, including existing paths and values shown in the next steps.
+pub struct InitSettings {
     pub secret_key_file: PathBuf,
     pub dns_records_file: Option<PathBuf>,
+    pub http_backend_addr: SocketAddr,
+    pub pkarr_mode: Option<PkarrMode>,
 }
 
 /// Validate existing settings offline and resolve the paths init should fill in.
 /// Missing files are allowed here; normal startup requires them.
-pub fn init_file_paths(config_path: &Path) -> Result<InitFilePaths> {
+pub fn init_settings(config_path: &Path) -> Result<InitSettings> {
     let file = match fs::symlink_metadata(config_path) {
         Ok(_) => read_config_file(config_path)?,
         Err(error) if error.kind() == ErrorKind::NotFound => FileConfig::default(),
@@ -289,9 +291,15 @@ pub fn init_file_paths(config_path: &Path) -> Result<InitFilePaths> {
         pkarr_publish_settings(&check_args, &file, &location, None)?;
     }
     let parent = config_path.parent().unwrap_or(Path::new("."));
-    Ok(InitFilePaths {
+    Ok(InitSettings {
         secret_key_file: parent.join(file.secret_key_file.unwrap_or_else(|| "secret".into())),
         dns_records_file,
+        http_backend_addr: file.http_backend_addr.unwrap_or(DEFAULT_HTTP_BACKEND_ADDR),
+        pkarr_mode: file
+            .pkarr
+            .publish
+            .unwrap_or(true)
+            .then(|| file.pkarr.mode.unwrap_or_default()),
     })
 }
 

@@ -12,6 +12,8 @@ All notable changes are documented here. The format is based on
   `--port` override the defaults. Review the files before startup publishes them.
   Detection failure leaves setup files untouched and explains the IP override.
   Existing files are validated and preserved, and partial setup can be resumed.
+  Setup lists files and explains backend/address configuration and the check/start
+  commands. Routine setup logs are hidden unless enabled with `RUST_LOG`.
 
 ### Changed
 - **Breaking:** Startup and `--check` require an existing config and secret key;

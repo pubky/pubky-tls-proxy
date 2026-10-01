@@ -11,6 +11,7 @@ fn init(directory: &Path, extra: &[&str]) -> Output {
         .arg("init")
         .arg("--directory")
         .arg(directory)
+        .env_remove("RUST_LOG")
         .args(extra)
         .output()
         .unwrap()
@@ -27,6 +28,11 @@ fn creates_starter_files_without_a_terminal_or_publication_and_preserves_them() 
         String::from_utf8_lossy(&result.stderr)
     );
     assert!(String::from_utf8_lossy(&result.stdout).contains("Nothing has been published"));
+    let output = String::from_utf8_lossy(&result.stdout);
+    assert!(!output.contains("Generated secret key file"));
+    assert!(!output.contains("Public Key Domain:"));
+    assert!(output.contains("set http_backend_addr to your HTTP service"));
+    assert!(output.contains("Starting the proxy publishes your DNS records"));
     let files: Vec<_> = ["config.toml", "secret", "dns-records.toml"]
         .into_iter()
         .map(|name| {
@@ -46,6 +52,9 @@ fn creates_starter_files_without_a_terminal_or_publication_and_preserves_them() 
         "{}",
         String::from_utf8_lossy(&repeated.stderr)
     );
+    let output = String::from_utf8_lossy(&repeated.stdout);
+    assert_eq!(output.matches("kept existing").count(), 3);
+    assert!(!output.contains("Public IP:"));
     for (path, contents) in files {
         assert_eq!(fs::read(path).unwrap(), contents);
     }
@@ -78,7 +87,7 @@ fn invalid_inputs_do_not_create_the_directory() {
 #[test]
 fn partial_setup_respects_existing_config_paths_and_secret() {
     let dir = tempfile::tempdir().unwrap();
-    let config = "secret_key_file = 'saved.hex'\n[pkarr]\ndns_records_file = 'dns/custom.toml'\n";
+    let config = "secret_key_file = 'saved.hex'\nhttp_backend_addr = '127.0.0.1:9000'\n[pkarr]\ndns_records_file = 'dns/custom.toml'\n";
     fs::write(dir.path().join("config.toml"), config).unwrap();
     let secret = "01".repeat(32);
     fs::write(dir.path().join("saved.hex"), &secret).unwrap();
@@ -100,6 +109,8 @@ fn partial_setup_respects_existing_config_paths_and_secret() {
         .unwrap()
         .contains("port = 443"));
     assert!(!dir.path().join("dns-records.toml").exists());
+    assert!(String::from_utf8_lossy(&result.stdout).contains("Current: 127.0.0.1:9000"));
+    assert!(String::from_utf8_lossy(&result.stdout).contains("dns/custom.toml"));
 }
 
 #[test]
@@ -162,24 +173,37 @@ fn concurrent_setup_keeps_complete_files_and_a_single_identity() {
             .map(|handle| handle.join().unwrap())
             .collect::<Vec<_>>()
     });
-    let mut domains = Vec::new();
     for result in results {
         assert!(
             result.status.success(),
             "{}",
             String::from_utf8_lossy(&result.stderr)
         );
-        domains.push(
-            String::from_utf8(result.stdout)
-                .unwrap()
-                .lines()
-                .find(|line| line.starts_with("Public Key Domain:"))
-                .unwrap()
-                .to_owned(),
-        );
     }
-    assert!(domains.iter().all(|domain| domain == &domains[0]));
+    assert_eq!(
+        hex::decode(fs::read_to_string(directory.join("secret")).unwrap().trim())
+            .unwrap()
+            .len(),
+        32
+    );
     assert_eq!(fs::read_dir(directory).unwrap().count(), 3);
+}
+
+#[test]
+fn explicit_log_filter_enables_setup_diagnostics() {
+    let dir = tempfile::tempdir().unwrap();
+    let result = Command::new(env!("CARGO_BIN_EXE_pubky-tls-proxy"))
+        .args(["init", "--public-ip", "8.8.8.8", "--directory"])
+        .arg(dir.path())
+        .env("RUST_LOG", "info")
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert!(String::from_utf8_lossy(&result.stdout).contains("Generated secret key file"));
 }
 
 #[test]

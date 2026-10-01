@@ -29,12 +29,12 @@ const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    init_logging();
-
     let args = cli::Args::parse();
     if let Some(cli::Command::Init(init_args)) = &args.command {
+        init_logging("warn");
         return init::run(init_args).await;
     }
+    init_logging(DEFAULT_LOG_FILTER);
     let check = args.check;
     let settings = Settings::load(args)?;
     let keypair = secret::check_keypair(&settings.secret_key_file)?.with_context(|| {
@@ -121,11 +121,11 @@ async fn wait_for_shutdown_signal() -> Result<()> {
 const DEFAULT_LOG_FILTER: &str = "info,rustls=error";
 
 /// Logs according to `RUST_LOG` (e.g. `RUST_LOG=pubky_tls_proxy=debug`), or
-/// [`DEFAULT_LOG_FILTER`] if it isn't set.
+/// the command's default filter if it isn't set. Setup hides routine logs by default.
 /// Colours are only used on a terminal, so they don't end up in e.g. the systemd journal.
-fn init_logging() {
+fn init_logging(default_filter: &str) {
     let filter =
-        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(DEFAULT_LOG_FILTER));
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default_filter));
     tracing_subscriber::fmt()
         .with_env_filter(filter)
         .with_ansi(std::io::stdout().is_terminal())

@@ -36,11 +36,12 @@ pub async fn run(args: &InitArgs) -> Result<()> {
             .join(".pubky-tls-proxy"),
     };
     let config_path = directory.join("config.toml");
-    let paths = crate::config::init_file_paths(&config_path)?;
-    let secret_path = paths.secret_key_file;
-    let records_path = paths.dns_records_file;
-    let existing_key = crate::secret::check_keypair(&secret_path)?;
-    let existing_records = match &records_path {
+    let settings = crate::config::init_settings(&config_path)?;
+    let secret_path = &settings.secret_key_file;
+    let records_path = settings.dns_records_file.as_deref();
+    let existing_key = crate::secret::check_keypair(secret_path)?;
+    let secret_existed = existing_key.is_some();
+    let existing_records = match records_path {
         Some(path) if path_exists(path)? => Some(crate::dns_records::DnsRecords::load(path)?),
         _ => None,
     };
@@ -56,37 +57,39 @@ pub async fn run(args: &InitArgs) -> Result<()> {
         None
     };
 
-    if let (Some(records), Some(path)) = (&prepared_records, &records_path) {
+    if let (Some(records), Some(path)) = (&prepared_records, records_path) {
         crate::dns_records::DnsRecords::parse(&records.contents, path)?
             .sign(&existing_key.unwrap_or_else(pkarr::Keypair::random), None)?;
     }
-    create_file_if_missing(&config_path, include_str!("../config.example.toml"))?;
-    let keypair = crate::secret::load_or_create_keypair(&secret_path)?;
-    if let (Some(records), Some(path)) = (&prepared_records, &records_path) {
-        create_file_if_missing(path, &records.contents)?;
+    let config_created =
+        create_file_if_missing(&config_path, include_str!("../config.example.toml"))?;
+    let keypair = crate::secret::load_or_create_keypair(secret_path)?;
+    let mut records_created = false;
+    if let (Some(records), Some(path)) = (&prepared_records, records_path) {
+        records_created = create_file_if_missing(path, &records.contents)?;
     }
-    if let Some(path) = &records_path {
+    if let Some(path) = records_path {
         crate::dns_records::DnsRecords::load(path)?.sign(&keypair, None)?;
     }
     println!("\nSetup complete. Nothing has been published.");
-    println!("Public Key Domain: {}", keypair.public_key());
-    println!(
-        "\nStarter files are ready in {}. Existing files are preserved.",
-        directory.display()
-    );
-    if let Some(records) = &prepared_records {
-        println!(
-            "Starter DNS records use {} and port {} for a typical public-server setup.",
-            records.address, records.port
-        );
-    } else if records_path.is_some() {
-        println!("Existing DNS records were kept unchanged.");
+    println!("\nFiles in {}:", directory.display());
+    print_file(&directory, &config_path, "Proxy settings", !config_created);
+    if let Some(path) = records_path {
+        let description = match &prepared_records {
+            Some(records) if records_created => {
+                format!("Public IP: {} · Port: {}", records.address, records.port)
+            }
+            _ => "DNS records".to_owned(),
+        };
+        print_file(&directory, path, &description, !records_created);
     }
-    print_next_steps(
-        &config_path,
-        records_path.as_deref(),
-        args.directory.is_some(),
+    print_file(
+        &directory,
+        secret_path,
+        "Your identity key — keep and back up",
+        secret_existed,
     );
+    print_next_steps(&config_path, &settings, args.directory.is_some());
     Ok(())
 }
 
@@ -117,21 +120,49 @@ async fn prepare_records(args: &InitArgs) -> Result<PreparedRecords> {
     })
 }
 
-fn print_next_steps(config_path: &Path, records_path: Option<&Path>, custom_directory: bool) {
-    if let Some(path) = records_path {
-        println!(
-            "Review the IP/port in {} and backend settings before starting:",
-            path.display()
-        );
+fn print_file(directory: &Path, path: &Path, description: &str, kept_existing: bool) {
+    let name = path.strip_prefix(directory).unwrap_or(path);
+    let status = if kept_existing {
+        " (kept existing)"
     } else {
-        println!("Review backend settings before starting:");
+        ""
+    };
+    println!("  {:<18} {description}{status}", name.display());
+}
+
+fn print_next_steps(
+    config_path: &Path,
+    settings: &crate::config::InitSettings,
+    custom_directory: bool,
+) {
+    let directory = config_path.parent().unwrap_or(Path::new("."));
+    let config_name = config_path.strip_prefix(directory).unwrap_or(config_path);
+    println!("\nBefore starting:");
+    println!(
+        "  1. Open {} and set http_backend_addr to your HTTP service.",
+        config_name.display()
+    );
+    println!("     Current: {}", settings.http_backend_addr);
+    if let Some(path) = &settings.dns_records_file {
+        let name = path.strip_prefix(directory).unwrap_or(path);
+        println!("\n  2. Check the IP and port in {}.", name.display());
+        println!("     Clients must be able to reach this address and port.");
     }
     let config_arg = if custom_directory {
         format!(" --config {config_path:?}")
     } else {
         String::new()
     };
-    println!("  pubky-tls-proxy{config_arg} --check\n  pubky-tls-proxy{config_arg}");
+    println!("\nThen validate and start:\n  pubky-tls-proxy{config_arg} --check\n  pubky-tls-proxy{config_arg}");
+    match settings.pkarr_mode {
+        Some(crate::config::PkarrMode::LocalRecords) => {
+            println!("\nStarting the proxy publishes your DNS records.")
+        }
+        Some(crate::config::PkarrMode::ExternalPacket) => {
+            println!("\nStarting the proxy republishes your externally managed DNS packet.")
+        }
+        None => println!("\nStarting the proxy runs with publishing disabled."),
+    }
 }
 
 fn path_exists(path: &Path) -> Result<bool> {
@@ -143,9 +174,10 @@ fn path_exists(path: &Path) -> Result<bool> {
 }
 
 /// Persist complete contents without replacing any existing path, including symlinks.
-fn create_file_if_missing(path: &Path, contents: &str) -> Result<()> {
+/// Returns true only when this call created the file.
+fn create_file_if_missing(path: &Path, contents: &str) -> Result<bool> {
     if path_exists(path)? {
-        return Ok(());
+        return Ok(false);
     }
     let parent = path
         .parent()
@@ -156,8 +188,8 @@ fn create_file_if_missing(path: &Path, contents: &str) -> Result<()> {
     temporary.write_all(contents.as_bytes())?;
     temporary.as_file().sync_all()?;
     match temporary.persist_noclobber(path) {
-        Ok(_) => Ok(()),
-        Err(error) if error.error.kind() == io::ErrorKind::AlreadyExists => Ok(()),
+        Ok(_) => Ok(true),
+        Err(error) if error.error.kind() == io::ErrorKind::AlreadyExists => Ok(false),
         Err(error) => Err(error).with_context(|| format!("Cannot create {}", path.display())),
     }
 }
