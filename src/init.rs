@@ -137,14 +137,13 @@ struct PreparedRecords {
 
 async fn prepare_records(args: &InitArgs) -> Result<PreparedRecords> {
     if !args.non_interactive {
-        println!("Public address");
+        println!("Public address\n");
+        println!("Your DNS records tell clients where to connect.");
+        println!("Set the public IP and port that lead to this proxy.\n");
     }
     let suggested = match args.public_ip {
         Some(ip) => {
             validate_public_ipv4(ip)?;
-            if !args.non_interactive {
-                println!("Address supplied with --public-ip: {ip}");
-            }
             Some(ip)
         }
         None if args.non_interactive => {
@@ -153,10 +152,7 @@ async fn prepare_records(args: &InitArgs) -> Result<PreparedRecords> {
         None => {
             println!("Looking up your public IPv4...");
             match detect_public_ipv4().await {
-                Ok(ip) => {
-                    println!("Detected outbound address: {ip}");
-                    Some(ip)
-                }
+                Ok(ip) => Some(ip),
                 Err(error) => {
                     tracing::debug!("Public IPv4 detection failed: {error:#}");
                     println!("Could not detect an address. Enter it manually.");
@@ -166,7 +162,7 @@ async fn prepare_records(args: &InitArgs) -> Result<PreparedRecords> {
         }
     };
     let ip = if !args.non_interactive {
-        println!("Verify this address is reachable by your clients.\n");
+        println!("Verify the suggested address is reachable by your clients.\n");
         loop {
             let input = prompt(
                 "Public IPv4 address",
