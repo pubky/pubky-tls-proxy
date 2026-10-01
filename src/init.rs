@@ -97,9 +97,12 @@ pub async fn run(args: &InitArgs) -> Result<()> {
             .map(|path| path.as_path())
             .collect();
         let has_missing_files = review_files(&file_paths, &directory)?;
-        if has_missing_files && !prompt("\nCreate files? [y/N]", None)?.eq_ignore_ascii_case("y") {
-            println!("Setup cancelled. No files created.");
-            return Ok(());
+        if has_missing_files {
+            let answer = prompt("\nCreate files? [Y/n]", None)?;
+            if !answer.is_empty() && !answer.eq_ignore_ascii_case("y") {
+                println!("Setup cancelled. No files created.");
+                return Ok(());
+            }
         }
         if !has_missing_files {
             println!("\nAll files already exist and are valid.");
