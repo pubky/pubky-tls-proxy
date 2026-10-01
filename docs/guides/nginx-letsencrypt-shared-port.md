@@ -111,8 +111,8 @@ For an existing installation, first update its configuration using the
 
 With the upcoming release, run
 `pubky-tls-proxy init --port 443` as your normal user to prepare the directory,
-secret key, and A + HTTPS records. Review the suggested IP and select public port
-`443`, not nginx's internal `8443`. Nothing is published by setup. Then configure
+secret key, and A + HTTPS records. Review the detected IP and advertised port
+`443` in the written records, not nginx's internal `8443`. Nothing is published by setup. Then configure
 the listeners and backends below and review the generated records instead of
 creating them manually. The v0.4.0 binary installed above uses the manual steps.
 See [initialization](../configuration.md#initialization).

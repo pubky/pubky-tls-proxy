@@ -82,34 +82,33 @@ work with v0.4.0.
 pubky-tls-proxy init
 ```
 
-On a terminal, setup introduces the files it will prepare, then asks for a public
-IPv4 address and public TLS port (default `8443`). A compact review shows the endpoint,
-record types, and which files will be created or kept before confirmation.
-When all required files already exist and are valid, setup skips confirmation.
-Before confirmation it creates no directories or files. It prepares `config.toml`,
-`secret`, and `dns-records.toml` in `~/.pubky-tls-proxy/`. It never starts listeners,
-contacts PKARR networks, or publishes records.
+Setup writes starter files without prompts or a terminal requirement. It prepares
+`config.toml`, `secret`, and `dns-records.toml` in `~/.pubky-tls-proxy/`, using a
+detected public IPv4 and port `8443` for A + HTTPS records. These defaults suit a
+typical public-server setup. It never starts listeners, contacts PKARR networks,
+or publishes records. Review the IP, port, and backend settings before starting.
 
 Address detection queries `https://api.ipify.org`, with
 `https://ipv4.icanhazip.com` as a fallback, using direct IPv4 HTTPS connections.
 Each request has a three-second timeout, with a six-second overall limit.
-The result is only a suggestion: outbound NAT, CGNAT, and load balancers may use a
+The detected address may need editing: outbound NAT, CGNAT, and load balancers may use a
 different address from the one clients should connect to. Detection does not test
-inbound reachability. If it fails, enter the address manually. `--public-ip` skips
+inbound reachability. If detection fails, no setup files are created; rerun with
+`--public-ip YOUR_PUBLIC_IPV4`. `--public-ip` skips
 detection. Ensure the advertised TCP port reaches the proxy.
 
-For scripts, supply the address explicitly:
+To override the starter address or port:
 
 ```sh
-pubky-tls-proxy init --non-interactive --public-ip YOUR_PUBLIC_IPV4
+pubky-tls-proxy init --public-ip YOUR_PUBLIC_IPV4
 # Shared-port deployment:
-pubky-tls-proxy init --non-interactive --public-ip YOUR_PUBLIC_IPV4 --port 443
+pubky-tls-proxy init --public-ip YOUR_PUBLIC_IPV4 --port 443
 # Custom configuration directory:
-pubky-tls-proxy init --directory /path/to/proxy --non-interactive --public-ip YOUR_PUBLIC_IPV4
+pubky-tls-proxy init --directory /path/to/proxy --public-ip YOUR_PUBLIC_IPV4
 ```
 
-Replace `YOUR_PUBLIC_IPV4` with a globally routable IPv4 address. Without a terminal,
-use `--non-interactive`; it requires `--public-ip` when DNS records are missing.
+Replace `YOUR_PUBLIC_IPV4` with a globally routable IPv4 address. The same prompt-free
+flow works in scripts; an explicit address avoids relying on an external detection service.
 `--port` changes the advertised port, not the listeners in `config.toml`.
 Edit listener and backend settings to match your deployment before starting.
 

@@ -7,11 +7,10 @@ All notable changes are documented here. The format is based on
 ## [Unreleased]
 
 ### Added
-- Give interactive setup a short introduction, address lookup progress, compact
-  review, and validation/start commands. Skip confirmation when all files exist.
-- Add interactive `init` to prepare configuration, a secret key, and A + HTTPS DNS
-  records for review without starting listeners or publishing. Public IPv4 detection
-  is a suggestion only; unattended setup requires an explicit `--public-ip`.
+- Add prompt-free `init` to prepare configuration, a secret key, and starter A + HTTPS
+  records using a detected public IPv4 and port 8443. Optional `--public-ip` and
+  `--port` override the defaults. Review the files before startup publishes them.
+  Detection failure leaves setup files untouched and explains the IP override.
   Existing files are validated and preserved, and partial setup can be resumed.
 
 ### Changed

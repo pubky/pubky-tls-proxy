@@ -11,14 +11,13 @@ fn init(directory: &Path, extra: &[&str]) -> Output {
         .arg("init")
         .arg("--directory")
         .arg(directory)
-        .arg("--non-interactive")
         .args(extra)
         .output()
         .unwrap()
 }
 
 #[test]
-fn creates_reviewable_files_without_starting_or_publishing_and_preserves_them() {
+fn creates_starter_files_without_a_terminal_or_publication_and_preserves_them() {
     let dir = tempfile::tempdir().unwrap();
     let directory = dir.path().join("setup");
     let result = init(&directory, &["--public-ip", "8.8.8.8"]);
@@ -64,26 +63,16 @@ fn creates_reviewable_files_without_starting_or_publishing_and_preserves_them() 
 }
 
 #[test]
-fn missing_or_invalid_inputs_do_not_create_the_directory() {
+fn invalid_inputs_do_not_create_the_directory() {
     let dir = tempfile::tempdir().unwrap();
     let directory = dir.path().join("setup");
     for args in [
-        &[][..],
-        &["--public-ip", "192.168.1.1"],
+        &["--public-ip", "192.168.1.1"][..],
         &["--public-ip", "8.8.8.8", "--port", "0"],
     ] {
         assert!(!init(&directory, args).status.success());
         assert!(!directory.exists());
     }
-    let result = Command::new(env!("CARGO_BIN_EXE_pubky-tls-proxy"))
-        .arg("init")
-        .arg("--directory")
-        .arg(&directory)
-        .output()
-        .unwrap();
-    assert!(!result.status.success());
-    assert!(String::from_utf8_lossy(&result.stderr).contains("No interactive terminal"));
-    assert!(!directory.exists());
 }
 
 #[test]
