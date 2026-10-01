@@ -6,6 +6,10 @@ All notable changes are documented here. The format is based on
 
 ## [Unreleased]
 
+### Changed
+- Link to the PKARR repository from the README, configuration reference, and setup
+  guides, and define PKARR in the terminology reference.
+
 ## [0.5.0] - 2026-10-01
 
 ### Added

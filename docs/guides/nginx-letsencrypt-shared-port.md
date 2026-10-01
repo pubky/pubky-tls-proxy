@@ -17,7 +17,7 @@ You need a server with `sudo` access, TCP ports **80 and 443** open to the publi
 Have the server's public IPv4 address ready. Prepare the secret key with `init`
 before starting; the service requires the saved identity.
 
-Your conventional DNS domain's record is for requests to `example.com` and Let's Encrypt. The proxy builds a PKARR packet from `dns-records.toml`, signs and publishes it through PKARR, letting applications discover the server by its Public Key Domain. This discovery is separate from TLS.
+Your conventional DNS domain's record is for requests to `example.com` and Let's Encrypt. The proxy builds a [PKARR](https://github.com/pubky/pkarr) packet from `dns-records.toml`, signs and publishes it through PKARR, letting applications discover the server by its Public Key Domain. This discovery is separate from TLS.
 
 ## 1. Install nginx and certbot
 

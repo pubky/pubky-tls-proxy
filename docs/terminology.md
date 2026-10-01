@@ -15,6 +15,7 @@ Use these terms consistently in documentation, CLI help, logs, and source commen
 | **HTTP backend** | The service receiving plain HTTP and HTTP decrypted from raw public key TLS. |
 | **TLS passthrough backend** | The service receiving encrypted TLS traffic and handling its TLS handshake, normally for certificate-based HTTPS. |
 | **TLS passthrough** | Forwarding TLS traffic without decrypting it. This also describes the internal fallback route for unparseable TLS handshakes. |
+| **PKARR** | [Public Key Addressable Resource Records](https://github.com/pubky/pkarr): signed DNS records addressed by a public key and published through the Mainline DHT and relays. |
 | **PKARR packet** | The signed object containing DNS records published through PKARR. Signing is implied by this term. |
 | **DNS records file** | The TOML file defining the complete record set to publish, normally `dns-records.toml`. |
 | **Local-records mode** | Publishing DNS records from a local file, then republishing the PKARR packet periodically. |
