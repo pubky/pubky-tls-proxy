@@ -21,7 +21,7 @@ stays the same.
 
 ## Getting started
 
-With a version that includes `init` (currently unreleased), prepare your files first:
+Prepare your files before starting:
 
 ```sh
 pubky-tls-proxy init

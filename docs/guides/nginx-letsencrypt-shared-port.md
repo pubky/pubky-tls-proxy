@@ -14,9 +14,8 @@ The proxy decrypts raw public key TLS but passes certificate-based HTTPS through
 
 You need a server with `sudo` access, TCP ports **80 and 443** open to the public, and a conventional DNS domain whose A record points to your server. This guide calls that domain `example.com`: **replace it with yours in every file name, command, and configuration example**.
 
-Have the server's public IPv4 address ready. The v0.4.0 binary used below generates
-your secret key on first startup. In the upcoming release, prepare it with `init`
-before starting; the service never generates a missing identity.
+Have the server's public IPv4 address ready. Prepare the secret key with `init`
+before starting; the service requires the saved identity.
 
 Your conventional DNS domain's record is for requests to `example.com` and Let's Encrypt. The proxy builds a PKARR packet from `dns-records.toml`, signs and publishes it through PKARR, letting applications discover the server by its Public Key Domain. This discovery is separate from TLS.
 
@@ -83,42 +82,38 @@ sudo systemctl reload nginx
 
 ## 3. Install Pubky TLS Proxy
 
-Download the prebuilt binary from the [releases page](https://github.com/pubky/pubky-tls-proxy/releases). This guide targets **v0.4.0**, which uses the configuration names shown below.
+Download the prebuilt binary from the [releases page](https://github.com/pubky/pubky-tls-proxy/releases). This guide targets **v0.5.0**.
 
 The commands below use **linux-amd64**. For a 64-bit ARM server, choose the matching archive on the releases page and replace the platform in the commands.
 
 ```bash
 mkdir -p ~/pubky-tls-proxy-download
 cd ~/pubky-tls-proxy-download
-curl -fLO https://github.com/pubky/pubky-tls-proxy/releases/download/v0.4.0/pubky-tls-proxy-linux-amd64-v0.4.0.tar.gz
-curl -fLO https://github.com/pubky/pubky-tls-proxy/releases/download/v0.4.0/SHA256SUMS
+curl -fLO https://github.com/pubky/pubky-tls-proxy/releases/download/v0.5.0/pubky-tls-proxy-linux-amd64-v0.5.0.tar.gz
+curl -fLO https://github.com/pubky/pubky-tls-proxy/releases/download/v0.5.0/SHA256SUMS
 sha256sum --ignore-missing -c SHA256SUMS
 ```
 
 The checksum must print `OK`. Extract and install the binary:
 
 ```bash
-tar -xzf pubky-tls-proxy-linux-amd64-v0.4.0.tar.gz
-sudo cp pubky-tls-proxy-linux-amd64-v0.4.0/pubky-tls-proxy /usr/local/bin/pubky-tls-proxy
+tar -xzf pubky-tls-proxy-linux-amd64-v0.5.0.tar.gz
+sudo cp pubky-tls-proxy-linux-amd64-v0.5.0/pubky-tls-proxy /usr/local/bin/pubky-tls-proxy
 sudo chmod 755 /usr/local/bin/pubky-tls-proxy
 pubky-tls-proxy --version
 ```
 
 ## 4. Configure the proxy
 
-With the upcoming release, run
-`pubky-tls-proxy init --port 443` as your normal user to prepare the directory,
-secret key, and A + HTTPS records. Review the detected IP and advertised port
-`443` in the written records, not nginx's internal `8443`. Nothing is published by setup. Then configure
-the listeners and backends below and review the generated records instead of
-creating them manually. The v0.4.0 binary installed above uses the manual steps.
-See [initialization](../configuration.md#initialization).
-
-Run the proxy as your normal login user. Keep its configuration, secret key file, and packet cache together in `~/.pubky-tls-proxy/`. Create the directory without `sudo`:
+Run the proxy as your normal login user. Prepare its configuration, secret key, and
+A + HTTPS records in `~/.pubky-tls-proxy/`, without `sudo`:
 
 ```bash
-mkdir -p ~/.pubky-tls-proxy
+pubky-tls-proxy init --port 443
 ```
+
+Nothing is published by setup. Review the detected IP and advertised port `443`,
+then configure the listeners and backends below. See [initialization](../configuration.md#initialization).
 
 Open the config file:
 
@@ -126,7 +121,7 @@ Open the config file:
 nano ~/.pubky-tls-proxy/config.toml
 ```
 
-Paste this and save it. The proxy owns ports 80 and 443. nginx receives decrypted raw public key TLS traffic on port 8080 and still-encrypted certificate-based HTTPS on port 8443 (after step 6). The proxy uses `secret` and `pkarr-packet.cache` beside this file by default.
+Replace the starter configuration with this and save it. The proxy owns ports 80 and 443. nginx receives decrypted raw public key TLS traffic on port 8080 and still-encrypted certificate-based HTTPS on port 8443 (after step 6). The proxy uses `secret` and `pkarr-packet.cache` beside this file by default.
 
 ```toml
 listen_addrs = ["0.0.0.0:80", "0.0.0.0:443"]
@@ -138,29 +133,17 @@ tls_passthrough_backend_addr = "127.0.0.1:8443"
 dns_records_file = "dns-records.toml"
 ```
 
-### Publish DNS records for your Public Key Domain
+### Review DNS records for your Public Key Domain
 
-Create the DNS records file next to the config. The `dns_records_file` setting makes this file required:
+Open the records written by `init`. The `dns_records_file` setting makes this file required:
 
 ```bash
 nano ~/.pubky-tls-proxy/dns-records.toml
 ```
 
-Replace `203.0.113.10` with your server's public IPv4 address and save:
-
-```toml
-[[records]]
-name = "@"
-type = "A"
-address = "203.0.113.10"
-
-[[records]]
-name = "@"
-type = "HTTPS"
-priority = 1
-target = "."
-port = 443
-```
+Confirm the A record contains the server's public IPv4 address and the HTTPS record
+uses `port = 443`. Correct the values if detection found an outbound address that
+differs from the address clients connect to.
 
 `@` means the apex of your Public Key Domain. In the HTTPS record, `target = "."` uses that same host, and `port = 443` tells clients to use the shared public port. Use 443 here, not nginx's internal port 8443.
 
@@ -170,9 +153,8 @@ Validate the files as your normal user, without `sudo`:
 pubky-tls-proxy --check
 ```
 
-Look for `Configuration and DNS records are valid`. In v0.4.0, a missing key is
-reported as pending generation at startup. In the upcoming release, the key must
-already exist (run `init` first). The check runs offline and creates no files.
+Look for `Configuration and DNS records are valid`. The check requires the files
+prepared by `init`, runs offline, and creates no files.
 The service publishes the DNS records when it starts.
 
 ## 5. Start the proxy
@@ -220,8 +202,7 @@ sudo journalctl -u pubky-tls-proxy -n 30 --no-pager
 
 Look for your public key, `Listening on 0.0.0.0:80`, and `Listening on 0.0.0.0:443`. For DNS publishing, look for `Managing 2 DNS records from ...`, followed by `Published local PKARR packet to DHT` or `Published local PKARR packet to relays`. Publishing may take a little while; check the log again if needed.
 
-The secret key at `~/.pubky-tls-proxy/secret` has owner-only permissions. In v0.4.0
-it is created on first startup; in the upcoming release it is created by `init`.
+The secret key created by `init` at `~/.pubky-tls-proxy/secret` has owner-only permissions.
 Back it up securely to retain control of your Public Key Domain. Generating a
 replacement key creates a different Public Key Domain. Keep using the same directory across updates.
 
