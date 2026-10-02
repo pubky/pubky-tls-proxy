@@ -7,6 +7,9 @@ All notable changes are documented here. The format is based on
 ## [Unreleased]
 
 ### Changed
+- Rewrite the README and nginx setup guides using ISO 24495-1 plain-language
+  principles and Google's developer documentation style, with clearer setup
+  choices, task sections, verification results, and symptom-led troubleshooting.
 - Link to the PKARR repository from the README, configuration reference, and setup
   guides, and define PKARR in the terminology reference.
 
