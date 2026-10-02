@@ -7,6 +7,9 @@ All notable changes are documented here. The format is based on
 ## [Unreleased]
 
 ### Changed
+- Rewrite the configuration reference in the same Google and ISO plain-language
+  style, grouping related options and clarifying initialization, publishing modes,
+  DNS record fields, and secret key management.
 - Rewrite the README and nginx setup guides using ISO 24495-1 plain-language
   principles and Google's developer documentation style, with clearer setup
   choices, task sections, verification results, and symptom-led troubleshooting.
