@@ -1,0 +1,11 @@
+[licenses]
+# Explicitly allow the licenses required by the dependency graph.
+allow = [
+    "Apache-2.0",
+    "BSD-3-Clause",
+    "CDLA-Permissive-2.0",
+    "ISC",
+    "MIT",
+    "Unicode-3.0",
+    "Zlib",
+]

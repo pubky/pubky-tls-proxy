@@ -10,6 +10,10 @@ All notable changes are documented here. The format is based on
 - Update dependencies to resolve reported RustSec advisories, including TLS
   certificate verification issues, and replace the yanked `spin` version.
 
+### Added
+- Add a `cargo deny` license allowlist and declare the existing MIT license in
+  the package metadata.
+
 ### Changed
 - Rewrite the configuration reference in the same Google and ISO plain-language
   style, grouping related options and clarifying initialization, publishing modes,
