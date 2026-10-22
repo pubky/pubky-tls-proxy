@@ -6,6 +6,10 @@ All notable changes are documented here. The format is based on
 
 ## [Unreleased]
 
+### Security
+- Update dependencies to resolve reported RustSec advisories, including TLS
+  certificate verification issues, and replace the yanked `spin` version.
+
 ### Changed
 - Rewrite the configuration reference in the same Google and ISO plain-language
   style, grouping related options and clarifying initialization, publishing modes,
