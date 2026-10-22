@@ -2,6 +2,7 @@
 name = "pubky-tls-proxy"
 version = "0.5.0"
 edition = "2021"
+license-file = "LICENSE"
 
 [dependencies]
 pkarr = { version = "8.0.2", features = ["full"] }
